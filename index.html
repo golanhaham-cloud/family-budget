@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>תקציב המשפחה</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@500;700;800&family=Assistant:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Assistant', sans-serif; background: #F3F6F4; -webkit-tap-highlight-color: transparent; }
+  input, select { font-family: 'Assistant', sans-serif; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel-source" id="app-source">
+
+const { useState, useEffect, useMemo, useCallback } = React;
+
+/* ---------- design tokens ---------- */
+const COLORS = {
+  ink: "#14213D", paper: "#F3F6F4", card: "#FFFFFF",
+  sage: "#2F6F5E", sageLight: "#E4F0EC",
+  amber: "#E3A008", amberLight: "#FBF0D6",
+  coral: "#E4572E", coralLight: "#FBE2DA",
+  mist: "#E1E8E4", sub: "#6B7A75",
+};
+
+const DEFAULT_CATEGORIES = [
+  { id: "c1", name: "סופר ומזון", icon: "🛒", active: true },
+  { id: "c2", name: "מסעדות ואוכל בחוץ", icon: "🍽️", active: true },
+  { id: "c3", name: "בילויים", icon: "🎉", active: true },
+  { id: "c4", name: "קניות", icon: "🛍️", active: true },
+  { id: "c5", name: "דלק", icon: "⛽", active: true },
+  { id: "c6", name: "רכב", icon: "🚗", active: true },
+  { id: "c7", name: "ילדים", icon: "🧸", active: true },
+  { id: "c8", name: "בית", icon: "🏠", active: true },
+  { id: "c9", name: "פארם", icon: "💊", active: true },
+  { id: "c10", name: "בגדים", icon: "👕", active: true },
+  { id: "c11", name: "שונות", icon: "📦", active: true },
+];
+const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
+const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+
+function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
+function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
+function daysInMonth(d) { return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); }
+function todayISO() { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`; }
+function fmt(n) { const v = Math.round(Number(n) || 0); return `${v.toLocaleString("he-IL")} ₪`; }
+function pct(spent, budget) { if (!budget || budget <= 0) return spent > 0 ? 999 : 0; return (spent / budget) * 100; }
+function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return COLORS.amber; return COLORS.sage; }
+
+/* ---------- storage helpers (JSONBin.io) ---------- */
+const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
+const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [] };
+function normalizeData(d) {
+  return {
+    categories: d.categories || DEFAULT_CATEGORIES,
+    budgets: d.budgets || {},
+    expenses: d.expenses || [],
+    fixedExpenses: d.fixedExpenses || [],
+    incomeEntries: d.incomeEntries || [],
+  };
+}
+
+async function jsonbinCreate() {
+  const res = await fetch("https://api.jsonbin.io/v3/b", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY, "X-Bin-Name": "family-budget" },
+    body: JSON.stringify(EMPTY_DATA),
+  });
+  if (!res.ok) throw new Error("create failed");
+  const json = await res.json();
+  return json.metadata.id;
+}
+async function loadAppData(binId) {
+  if (!binId) return EMPTY_DATA;
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, { headers: { "X-Master-Key": JSONBIN_KEY } });
+    if (!res.ok) throw new Error("load failed");
+    const json = await res.json();
+    return normalizeData(json.record || EMPTY_DATA);
+  } catch (e) { console.error(e); return EMPTY_DATA; }
+}
+async function saveAppData(binId, data) {
+  if (!binId) return;
+  try {
+    await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY },
+      body: JSON.stringify(data),
+    });
+  } catch (e) { console.error(e); }
+}
+
+/* ---------- small UI atoms ---------- */
+function RingGauge({ percent, size = 108, stroke = 11, color }) {
+  const clamped = Math.min(percent, 100);
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (clamped / 100) * c;
+  return (
+    <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+      <circle cx={size / 2} cy={size / 2} r={r} stroke={COLORS.mist} strokeWidth={stroke} fill="none" />
+      <circle cx={size / 2} cy={size / 2} r={r} stroke={color} strokeWidth={stroke} fill="none"
+        strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+        style={{ transition: "stroke-dashoffset 0.6s ease" }} />
+    </svg>
+  );
+}
+function ProgressBar({ percent, color }) {
+  return (
+    <div style={{ height: 8, borderRadius: 999, background: COLORS.mist, overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${Math.min(percent, 100)}%`, background: color, borderRadius: 999, transition: "width 0.5s ease" }} />
+    </div>
+  );
+}
+/* simple dependency-free charts */
+function BudgetVsActualChart({ data }) {
+  const max = Math.max(1, ...data.map(d => Math.max(d.budget, d.spent)));
+  return (
+    <div>
+      {data.map((d, i) => (
+        <div key={i} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 3 }}>{d.name}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <div style={{ flex: 1, height: 8, background: COLORS.mist, borderRadius: 999, overflow: "hidden" }}>
+              <div style={{ width: `${(d.budget / max) * 100}%`, height: "100%", background: COLORS.mist2 || "#B9C6C0", borderRadius: 999 }} />
+            </div>
+            <span style={{ fontSize: 10, color: COLORS.sub, width: 54, textAlign: "left" }}>{fmt(d.budget)}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ flex: 1, height: 8, background: COLORS.mist, borderRadius: 999, overflow: "hidden" }}>
+              <div style={{ width: `${(d.spent / max) * 100}%`, height: "100%", background: COLORS.sage, borderRadius: 999 }} />
+            </div>
+            <span style={{ fontSize: 10, color: COLORS.ink, width: 54, textAlign: "left", fontWeight: 700 }}>{fmt(d.spent)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+const PIE_COLORS = [COLORS.sage, COLORS.amber, COLORS.coral, "#4A90A4", "#8E7CC3", "#D4A373", "#6B9080", "#C9184A", "#457B9D", "#B08968", "#588157"];
+function DonutChart({ data }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  let acc = 0;
+  const stops = data.map((d, i) => {
+    const start = (acc / total) * 360;
+    acc += d.value;
+    const end = (acc / total) * 360;
+    return `${PIE_COLORS[i % PIE_COLORS.length]} ${start}deg ${end}deg`;
+  });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <div style={{
+        width: 160, height: 160, borderRadius: "50%",
+        background: `conic-gradient(${stops.join(",")})`,
+        position: "relative"
+      }}>
+        <div style={{ position: "absolute", inset: 30, borderRadius: "50%", background: COLORS.card }} />
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 12 }}>
+        {data.map((d, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: COLORS.sub }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: PIE_COLORS[i % PIE_COLORS.length] }} />
+            {d.name}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+function CumulativeLineChart({ points, budget }) {
+  if (points.length < 2) return null;
+  const w = 300, h = 130, pad = 8;
+  const maxY = Math.max(budget || 0, ...points.map(p => p.spent), 1);
+  const stepX = (w - pad * 2) / (points.length - 1);
+  const toXY = (p, i) => [pad + i * stepX, h - pad - (p.spent / maxY) * (h - pad * 2)];
+  const path = points.map((p, i) => toXY(p, i)).map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
+  const budgetY = h - pad - ((budget || 0) / maxY) * (h - pad * 2);
+  return (
+    <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ display: "block" }}>
+      {budget > 0 && <line x1={pad} y1={budgetY} x2={w - pad} y2={budgetY} stroke={COLORS.coral} strokeDasharray="4 4" strokeWidth="1.5" />}
+      <path d={path} fill="none" stroke={COLORS.sage} strokeWidth="2.5" />
+    </svg>
+  );
+}
+
+/* ================= SETUP SCREEN ================= */
+function SetupScreen({ onCreated }) {
+  const [status, setStatus] = useState("idle");
+  const [binId, setBinId] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const create = async () => {
+    setStatus("working");
+    try {
+      const id = await jsonbinCreate();
+      setBinId(id);
+      setStatus("done");
+    } catch (e) { setStatus("error"); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(binId); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch (e) {}
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: COLORS.card, borderRadius: 20, padding: 26, width: "100%", maxWidth: 400, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>הקמה חד-פעמית</div>
+        {status !== "done" && (
+          <>
+            <div style={{ color: COLORS.sub, fontSize: 13.5, marginBottom: 20, lineHeight: 1.6 }}>
+              לפני שהאפליקציה יכולה לשמור נתונים, צריך ליצור מאגר נתונים אחד. זה נעשה פעם אחת בלבד.
+            </div>
+            <button onClick={create} disabled={status === "working"} style={{
+              width: "100%", padding: "14px", borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff",
+              fontWeight: 800, fontSize: 15, cursor: status === "working" ? "default" : "pointer", opacity: status === "working" ? 0.7 : 1
+            }}>{status === "working" ? "יוצר מאגר…" : "צור מאגר נתונים"}</button>
+            {status === "error" && <div style={{ marginTop: 12, fontSize: 12.5, color: COLORS.coral }}>משהו השתבש. בדוק חיבור לאינטרנט ונסה שוב.</div>}
+          </>
+        )}
+        {status === "done" && (
+          <>
+            <div style={{ color: COLORS.sage, fontSize: 13.5, marginBottom: 14, fontWeight: 600 }}>
+              ✅ המאגר נוצר! העתק את הקוד ושלח אותו ל-Claude כדי לנעול אותו לצמיתות עבור שניכם:
+            </div>
+            <div style={{ background: COLORS.paper, border: `1.5px solid ${COLORS.mist}`, borderRadius: 10, padding: "12px 14px", fontSize: 13, fontFamily: "monospace", direction: "ltr", textAlign: "center", marginBottom: 12, wordBreak: "break-all" }}>{binId}</div>
+            <button onClick={copy} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px solid ${COLORS.sage}`, background: copied ? COLORS.sageLight : "#fff", color: COLORS.sage, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 }}>{copied ? "הועתק ✓" : "העתק קוד"}</button>
+            <button onClick={() => onCreated(binId)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: COLORS.ink, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>המשך לאפליקציה בינתיים</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= APP ================= */
+function BudgetApp() {
+  const [activeBinId, setActiveBinId] = useState(JSONBIN_ID);
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(EMPTY_DATA);
+  const [user, setUser] = useState(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [monthDate, setMonthDate] = useState(new Date());
+  const [tab, setTab] = useState("dashboard");
+  const [showAddExpense, setShowAddExpense] = useState(false);
+  const [editExpense, setEditExpense] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (!activeBinId) { setLoading(false); return; }
+    (async () => { const d = await loadAppData(activeBinId); setData(d); setLoading(false); })();
+  }, [activeBinId]);
+
+  const persist = useCallback(async (next) => {
+    setData(next);
+    await saveAppData(activeBinId, next);
+  }, [activeBinId]);
+
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+
+  const mKey = monthKey(monthDate);
+  const activeCategories = useMemo(() => data.categories.filter(c => c.active !== false), [data.categories]);
+  const monthBudgets = data.budgets[mKey] || {};
+  const monthExpenses = useMemo(() => data.expenses.filter(e => e.date && e.date.startsWith(mKey)), [data.expenses, mKey]);
+
+  const totalBudget = activeCategories.reduce((s, c) => s + (Number(monthBudgets[c.id]) || 0), 0);
+  const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const remaining = totalBudget - totalSpent;
+  const overallPct = pct(totalSpent, totalBudget);
+  const activeFixed = data.fixedExpenses.filter(f => f.active !== false);
+  const totalFixed = activeFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
+
+  const now = new Date();
+  const isCurrentMonth = mKey === monthKey(now);
+  const dim = daysInMonth(monthDate);
+  const daysPassed = isCurrentMonth ? now.getDate() : dim;
+  const daysLeft = isCurrentMonth ? dim - now.getDate() : 0;
+  const timePct = (daysPassed / dim) * 100;
+  const projected = daysPassed > 0 ? (totalSpent / daysPassed) * dim : 0;
+  const paceHigh = totalBudget > 0 && overallPct - timePct > 12 && isCurrentMonth;
+
+  const perCategory = useMemo(() => activeCategories.map(c => {
+    const budget = Number(monthBudgets[c.id]) || 0;
+    const spent = monthExpenses.filter(e => e.categoryId === c.id).reduce((s, e) => s + Number(e.amount || 0), 0);
+    return { ...c, budget, spent, percent: pct(spent, budget), remaining: budget - spent };
+  }), [activeCategories, monthBudgets, monthExpenses]);
+
+  const alerts = useMemo(() => {
+    const list = [];
+    perCategory.forEach(c => {
+      if (c.budget <= 0) return;
+      if (c.percent >= 100) list.push({ type: "coral", text: `${c.icon} ${c.name} — חריגה של ${fmt(c.spent - c.budget)}` });
+      else if (c.percent >= 90) list.push({ type: "coral", text: `${c.icon} ${c.name} כמעט בחריגה — נותרו ${fmt(c.remaining)}` });
+      else if (c.percent >= 80) list.push({ type: "amber", text: `${c.icon} ${c.name} מתקרב לתקציב — נותרו ${fmt(c.remaining)}` });
+    });
+    if (paceHigh) list.push({ type: "amber", text: `⚠️ קצב ההוצאות הכללי גבוה — צפי לסיים בכ־${fmt(projected)}` });
+    return list;
+  }, [perCategory, paceHigh, projected]);
+
+  const changeMonth = (delta) => { const d = new Date(monthDate); d.setMonth(d.getMonth() + delta); setMonthDate(d); };
+
+  const copyPrevBudget = async () => {
+    const prev = new Date(monthDate); prev.setMonth(prev.getMonth() - 1);
+    const prevBudget = data.budgets[monthKey(prev)];
+    if (!prevBudget) { showToast("אין תקציב לחודש הקודם"); return; }
+    await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...prevBudget } } });
+    showToast("התקציב הועתק מהחודש הקודם");
+  };
+  const setCategoryBudget = async (catId, amount) => {
+    await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...(data.budgets[mKey] || {}), [catId]: amount } } });
+  };
+  const addCategory = async (name, icon) => { await persist({ ...data, categories: [...data.categories, { id: uid(), name, icon, active: true }] }); };
+  const updateCategory = async (id, patch) => { await persist({ ...data, categories: data.categories.map(c => c.id === id ? { ...c, ...patch } : c) }); };
+  const removeCategory = async (id) => { await persist({ ...data, categories: data.categories.map(c => c.id === id ? { ...c, active: false } : c) }); };
+
+  const saveExpense = async (exp) => {
+    const next = exp.id
+      ? { ...data, expenses: data.expenses.map(e => e.id === exp.id ? exp : e) }
+      : { ...data, expenses: [...data.expenses, { ...exp, id: uid(), createdAt: Date.now() }] };
+    await persist(next);
+    setShowAddExpense(false); setEditExpense(null);
+    showToast("ההוצאה נשמרה");
+  };
+  const deleteExpense = async (id) => { await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); showToast("ההוצאה נמחקה"); };
+
+  const addFixedExpense = async (name, amount, dueDay) => {
+    await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, active: true }] });
+  };
+  const updateFixedExpense = async (id, patch) => {
+    await persist({ ...data, fixedExpenses: data.fixedExpenses.map(f => f.id === id ? { ...f, ...patch } : f) });
+  };
+  const removeFixedExpense = async (id) => {
+    await persist({ ...data, fixedExpenses: data.fixedExpenses.filter(f => f.id !== id) });
+  };
+
+  const addIncome = async (monthK, source, amount) => {
+    await persist({ ...data, incomeEntries: [...data.incomeEntries, { id: uid(), monthKey: monthK, source, amount }] });
+  };
+  const removeIncome = async (id) => {
+    await persist({ ...data, incomeEntries: data.incomeEntries.filter(i => i.id !== id) });
+  };
+
+  if (!activeBinId) return <SetupScreen onCreated={(id) => setActiveBinId(id)} />;
+
+  if (loading) {
+    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: COLORS.paper }}><div style={{ color: COLORS.sub }}>טוען…</div></div>;
+  }
+
+  if (!user) {
+    return (
+      <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ background: COLORS.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
+          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 24, color: COLORS.ink, marginBottom: 4 }}>תקציב המשפחה</div>
+          <div style={{ color: COLORS.sub, fontSize: 14, marginBottom: 20 }}>מי אתה?</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {["אני", "בן/בת הזוג"].map(n => (
+              <button key={n} onClick={() => setNameDraft(n)} style={{
+                flex: 1, padding: "12px 8px", borderRadius: 12, border: `2px solid ${nameDraft === n ? COLORS.sage : COLORS.mist}`,
+                background: nameDraft === n ? COLORS.sageLight : "#fff", color: COLORS.ink, fontWeight: 600, fontSize: 14, cursor: "pointer"
+              }}>{n}</button>
+            ))}
+          </div>
+          <input placeholder="או הקלד/י שם משלך" value={["אני", "בן/בת הזוג"].includes(nameDraft) ? "" : nameDraft} onChange={e => setNameDraft(e.target.value)}
+            style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, fontSize: 14, marginBottom: 16, boxSizing: "border-box" }} />
+          <button disabled={!nameDraft.trim()} onClick={() => setUser(nameDraft.trim())} style={{
+            width: "100%", padding: "13px", borderRadius: 12, border: "none", background: nameDraft.trim() ? COLORS.sage : COLORS.mist,
+            color: "#fff", fontWeight: 700, fontSize: 15, cursor: nameDraft.trim() ? "pointer" : "default"
+          }}>כניסה</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: COLORS.paper, color: COLORS.ink, paddingBottom: 90 }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 20, background: COLORS.paper, paddingTop: 14, paddingBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
+          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20 }}>תקציב המשפחה</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.card, borderRadius: 10, padding: "6px 10px", fontSize: 13, color: COLORS.sub }}>👤 {user}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 10 }}>
+          <button onClick={() => changeMonth(1)} style={navBtnStyle}>›</button>
+          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 17, minWidth: 140, textAlign: "center" }}>{HEBREW_MONTHS[monthDate.getMonth()]} {monthDate.getFullYear()}</div>
+          <button onClick={() => changeMonth(-1)} style={navBtnStyle}>‹</button>
+        </div>
+      </div>
+
+      <div style={{ padding: "10px 16px 0" }}>
+        {tab === "dashboard" && (
+          <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct}
+            daysLeft={daysLeft} isCurrentMonth={isCurrentMonth} projected={projected} paceHigh={paceHigh}
+            perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={activeCategories} dim={dim}
+            onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} />
+        )}
+        {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
+        {tab === "fixed" && (
+          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} />
+        )}
+        {tab === "forecast" && (
+          <ForecastTab monthDate={monthDate} totalBudget={totalBudget} totalFixed={totalFixed} incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome} />
+        )}
+        {tab === "budget" && (
+          <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
+            onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget} />
+        )}
+      </div>
+
+      <button onClick={() => setShowAddExpense(true)} style={{
+        position: "fixed", bottom: 84, left: "50%", transform: "translateX(-50%)", background: COLORS.sage, color: "#fff",
+        border: "none", borderRadius: 999, padding: "13px 26px", display: "flex", alignItems: "center", gap: 8,
+        fontWeight: 700, fontSize: 15, boxShadow: "0 8px 24px rgba(47,111,94,0.4)", zIndex: 30, cursor: "pointer"
+      }}>＋ הוצאה חדשה</button>
+
+      <div style={{ position: "fixed", bottom: 0, right: 0, left: 0, background: COLORS.card, borderTop: `1px solid ${COLORS.mist}`, display: "flex", zIndex: 25, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+        <NavBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")} icon="▦" label="דשבורד" />
+        <NavBtn active={tab === "expenses"} onClick={() => setTab("expenses")} icon="🧾" label="הוצאות" />
+        <NavBtn active={tab === "fixed"} onClick={() => setTab("fixed")} icon="📌" label="קבועות" />
+        <NavBtn active={tab === "forecast"} onClick={() => setTab("forecast")} icon="📈" label="תחזית" />
+        <NavBtn active={tab === "budget"} onClick={() => setTab("budget")} icon="💰" label="תקציב" />
+      </div>
+
+      {(showAddExpense || editExpense) && (
+        <ExpenseModal categories={activeCategories.length ? activeCategories : data.categories} user={user} initial={editExpense}
+          onClose={() => { setShowAddExpense(false); setEditExpense(null); }} onSave={saveExpense} />
+      )}
+      {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", background: COLORS.ink, color: "#fff", padding: "10px 18px", borderRadius: 10, fontSize: 13, zIndex: 50 }}>{toast}</div>}
+    </div>
+  );
+}
+
+const navBtnStyle = { width: 34, height: 34, borderRadius: 999, border: "none", background: COLORS.card, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: COLORS.ink, fontSize: 18 };
+function NavBtn({ active, onClick, icon, label }) {
+  return (
+    <button onClick={onClick} style={{ flex: 1, border: "none", background: "none", padding: "10px 0 8px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, color: active ? COLORS.sage : COLORS.sub }}>
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <span style={{ fontSize: 11, fontWeight: active ? 700 : 500 }}>{label}</span>
+    </button>
+  );
+}
+
+/* ================= DASHBOARD ================= */
+function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense }) {
+  const gaugeColor = statusColor(overallPct);
+  const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
+  const barData = perCategory.filter(c => c.budget > 0 || c.spent > 0).map(c => ({ name: c.name, budget: c.budget, spent: c.spent }));
+  const pieData = perCategory.filter(c => c.spent > 0).map(c => ({ name: c.name, value: c.spent }));
+
+  const cumulative = useMemo(() => {
+    const byDay = {};
+    expenses.forEach(e => { const day = Number(e.date?.split("-")[2]); if (day) byDay[day] = (byDay[day] || 0) + Number(e.amount || 0); });
+    let running = 0; const arr = [];
+    const lastDay = isCurrentMonth ? new Date().getDate() : dim;
+    for (let d = 1; d <= lastDay; d++) { running += byDay[d] || 0; arr.push({ day: d, spent: running }); }
+    return arr;
+  }, [expenses, dim, isCurrentMonth]);
+
+  return (
+    <div>
+      <div style={{ background: COLORS.card, borderRadius: 20, padding: 20, boxShadow: "0 4px 20px rgba(20,33,61,0.05)", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <RingGauge percent={overallPct} color={gaugeColor} />
+            <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 22 }}>{Math.round(overallPct)}%</div>
+              <div style={{ fontSize: 10, color: COLORS.sub }}>נוצל</div>
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Row label="תקציב משתנה כולל" value={fmt(totalBudget)} />
+            <Row label="הוצאות בפועל" value={fmt(totalSpent)} />
+            <Row label="נשאר לתקציב" value={fmt(remaining)} bold color={remaining < 0 ? COLORS.coral : COLORS.sage} />
+          </div>
+        </div>
+        {isCurrentMonth && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${COLORS.mist}`, display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub }}>
+            <span>{daysLeft} ימים נותרו החודש</span>
+            {totalBudget > 0 && <span style={{ display: "flex", alignItems: "center", gap: 4, color: paceHigh ? COLORS.coral : COLORS.sage, fontWeight: 600 }}>{paceHigh ? "↑ קצב גבוה" : "↓ בקצב טוב"}</span>}
+          </div>
+        )}
+        {isCurrentMonth && totalBudget > 0 && (
+          <div style={{ marginTop: 6, fontSize: 12.5, color: COLORS.sub }}>אם תמשיך בקצב הנוכחי, צפוי שתסיים את החודש ב־<b style={{ color: COLORS.ink }}>{fmt(projected)}</b></div>
+        )}
+      </div>
+
+      {alerts.length > 0 && (
+        <div style={{ marginBottom: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+          {alerts.map((a, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 12, background: a.type === "coral" ? COLORS.coralLight : COLORS.amberLight, color: a.type === "coral" ? COLORS.coral : "#8a6400", fontSize: 13, fontWeight: 600 }}>
+              ⚠️ {a.text}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 8px" }}>קטגוריות</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
+        {perCategory.map(c => (
+          <div key={c.id} style={{ background: COLORS.card, borderRadius: 16, padding: 13, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <span style={{ fontSize: 17 }}>{c.icon}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
+            </div>
+            <ProgressBar percent={c.percent} color={statusColor(c.percent)} />
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 11.5, color: COLORS.sub }}>
+              <span>{fmt(c.spent)}</span><span>{fmt(c.budget)}</span>
+            </div>
+            {c.percent >= 100 && c.budget > 0
+              ? <div style={{ marginTop: 5, fontSize: 11, fontWeight: 700, color: COLORS.coral }}>חריגה של {fmt(c.spent - c.budget)}</div>
+              : <div style={{ marginTop: 5, fontSize: 11, color: COLORS.sub }}>נשאר {fmt(c.remaining)}</div>}
+          </div>
+        ))}
+      </div>
+
+      {barData.length > 0 && <ChartCard title="תקציב מול ביצוע"><BudgetVsActualChart data={barData} /></ChartCard>}
+      {pieData.length > 0 && <ChartCard title="התפלגות הוצאות"><DonutChart data={pieData} /></ChartCard>}
+      {cumulative.length > 1 && <ChartCard title="הוצאות מצטברות במהלך החודש"><CumulativeLineChart points={cumulative} budget={totalBudget} /></ChartCard>}
+
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 8px" }}>הוצאות אחרונות</div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 20 }}>
+        {recent.length === 0 && <div style={{ padding: 16, fontSize: 13, color: COLORS.sub, textAlign: "center" }}>עדיין אין הוצאות החודש</div>}
+        {recent.map((e, i) => <ExpenseRow key={e.id} exp={e} categories={categories} last={i === recent.length - 1} onEdit={onEditExpense} onDelete={onDeleteExpense} />)}
+      </div>
+    </div>
+  );
+}
+function Row({ label, value, bold, color }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", fontSize: 13.5 }}>
+      <span style={{ color: COLORS.sub }}>{label}</span>
+      <span style={{ fontWeight: bold ? 800 : 600, color: color || COLORS.ink, fontFamily: bold ? "Heebo, sans-serif" : "Assistant, sans-serif" }}>{value}</span>
+    </div>
+  );
+}
+function ChartCard({ title, children }) {
+  return (
+    <div style={{ background: COLORS.card, borderRadius: 16, padding: "14px 12px", marginBottom: 14, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 13.5, marginBottom: 10 }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+function categoryOf(categories, id) { return categories.find(c => c.id === id) || { name: "לא ידוע", icon: "❓" }; }
+function ExpenseRow({ exp, categories, last, onEdit, onDelete }) {
+  const [confirmDel, setConfirmDel] = useState(false);
+  const cat = categoryOf(categories, exp.categoryId);
+  const d = exp.date ? exp.date.split("-").reverse().join("/") : "";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: last ? "none" : `1px solid ${COLORS.mist}` }}>
+      <div style={{ fontSize: 19 }}>{cat.icon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{exp.description || cat.name}</div>
+        <div style={{ fontSize: 11.5, color: COLORS.sub }}>{cat.name} · {d} · {exp.user}</div>
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>{fmt(exp.amount)}</div>
+      {!confirmDel ? (
+        <div style={{ display: "flex", gap: 2 }}>
+          <button onClick={() => onEdit(exp)} style={iconBtnStyle}>✎</button>
+          <button onClick={() => setConfirmDel(true)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => { onDelete(exp.id); setConfirmDel(false); }} style={{ ...iconBtnStyle, background: COLORS.coral, color: "#fff" }}>✓</button>
+          <button onClick={() => setConfirmDel(false)} style={iconBtnStyle}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+const iconBtnStyle = { width: 28, height: 28, borderRadius: 8, border: "none", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 };
+
+/* ================= EXPENSES TAB ================= */
+function ExpensesTab({ expenses, categories, onEdit, onDelete }) {
+  const [filterCat, setFilterCat] = useState("");
+  const [filterUser, setFilterUser] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [q, setQ] = useState("");
+  const users = useMemo(() => [...new Set(expenses.map(e => e.user).filter(Boolean))], [expenses]);
+  const filtered = useMemo(() => expenses
+    .filter(e => !filterCat || e.categoryId === filterCat)
+    .filter(e => !filterUser || e.user === filterUser)
+    .filter(e => !from || e.date >= from)
+    .filter(e => !to || e.date <= to)
+    .filter(e => !q || (e.description || "").includes(q))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0)),
+    [expenses, filterCat, filterUser, from, to, q]);
+  const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
+
+  return (
+    <div>
+      <div style={{ background: COLORS.card, borderRadius: 16, padding: 12, marginBottom: 12 }}>
+        <input placeholder="🔍 חיפוש לפי תיאור" value={q} onChange={e => setQ(e.target.value)} style={{ width: "100%", padding: "9px 10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 13.5, marginBottom: 8, boxSizing: "border-box" }} />
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={selectStyle}>
+            <option value="">כל הקטגוריות</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+          </select>
+          <select value={filterUser} onChange={e => setFilterUser(e.target.value)} style={selectStyle}>
+            <option value="">כל המשתמשים</option>
+            {users.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 8px", fontSize: 13, color: COLORS.sub }}>
+        <span>{filtered.length} הוצאות</span><span style={{ fontWeight: 700, color: COLORS.ink }}>סה"כ: {fmt(total)}</span>
+      </div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 20 }}>
+        {filtered.length === 0 && <div style={{ padding: 20, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>לא נמצאו הוצאות</div>}
+        {filtered.map((e, i) => <ExpenseRow key={e.id} exp={e} categories={categories} last={i === filtered.length - 1} onEdit={onEdit} onDelete={onDelete} />)}
+      </div>
+    </div>
+  );
+}
+const selectStyle = { padding: "8px 10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, background: "#fff", flex: 1, minWidth: 110 };
+
+/* ================= FIXED EXPENSES TAB ================= */
+function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove }) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [dueDay, setDueDay] = useState("1");
+  const active = fixedExpenses.filter(f => f.active !== false).sort((a, b) => (a.dueDay || 1) - (b.dueDay || 1));
+  const total = active.reduce((s, f) => s + Number(f.amount || 0), 0);
+
+  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setAdding(false); };
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 10px" }}>הוצאות קבועות</div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
+        {active.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>עדיין לא הוגדרו הוצאות קבועות</div>}
+        {active.map((f, i) => (
+          <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === active.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 10, background: COLORS.sageLight, color: COLORS.sage,
+              display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12.5, flexShrink: 0
+            }}>{f.dueDay}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <input defaultValue={f.name} onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })}
+                style={{ width: "100%", border: "none", background: "none", fontSize: 13.5, fontWeight: 600, padding: 0 }} />
+              <div style={{ fontSize: 11, color: COLORS.sub }}>חיוב בכל {f.dueDay} לחודש</div>
+            </div>
+            <input type="number" defaultValue={f.amount} onBlur={(e) => onUpdate(f.id, { amount: Number(e.target.value) || 0 })}
+              style={{ width: 76, padding: "6px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
+            <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
+            <button onClick={() => onRemove(f.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
+        <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות לחודש</span>
+        <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(total)}</span>
+      </div>
+
+      {!adding ? (
+        <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>＋ הוספת הוצאה קבועה</button>
+      ) : (
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 14 }}>
+          <label style={labelStyle}>שם</label>
+          <input placeholder="למשל: משכנתא" value={name} onChange={e => setName(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
+          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>סכום</label>
+              <input type="number" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ width: 100 }}>
+              <label style={labelStyle}>יום חיוב</label>
+              <input type="number" min="1" max="31" value={dueDay} onChange={e => setDueDay(e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={reset} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
+            <button disabled={!name.trim() || !Number(amount)} onClick={() => { onAdd(name.trim(), Number(amount), Number(dueDay) || 1); reset(); }}
+              style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
+          </div>
+        </div>
+      )}
+      <div style={{ height: 20 }} />
+    </div>
+  );
+}
+
+/* ================= FORECAST TAB ================= */
+function ForecastTab({ monthDate, totalBudget, totalFixed, incomeEntries, onAddIncome, onRemoveIncome }) {
+  const [openMonth, setOpenMonth] = useState(null);
+  const [srcDraft, setSrcDraft] = useState("");
+  const [amtDraft, setAmtDraft] = useState("");
+
+  const months = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
+      arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}` });
+    }
+    return arr;
+  }, [monthDate]);
+
+  let running = 0;
+  const rows = months.map(m => {
+    const entries = incomeEntries.filter(e => e.monthKey === m.key);
+    const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const balance = income - totalFixed - totalBudget;
+    running += balance;
+    return { ...m, entries, income, balance, running };
+  });
+
+  const addIncomeHere = (mKey) => {
+    if (!srcDraft.trim() || !Number(amtDraft)) return;
+    onAddIncome(mKey, srcDraft.trim(), Number(amtDraft));
+    setSrcDraft(""); setAmtDraft("");
+  };
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 4px" }}>תחזית 6 חודשים</div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>הכנסות מול תקציב משתנה ({fmt(totalBudget)}) והוצאות קבועות ({fmt(totalFixed)}) מדי חודש</div>
+
+      {rows.map((r, idx) => (
+        <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}</div>
+            <div style={{ fontWeight: 800, fontSize: 15, color: r.balance >= 0 ? COLORS.sage : COLORS.coral }}>
+              {r.balance >= 0 ? "+" : ""}{fmt(r.balance)}
+            </div>
+          </div>
+          <Row label="הכנסות" value={fmt(r.income)} />
+          <Row label="הוצאות קבועות" value={"-" + fmt(totalFixed)} />
+          <Row label="תקציב משתנה מתוכנן" value={"-" + fmt(totalBudget)} />
+          <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
+            <Row label="יתרה מצטברת עד חודש זה" value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
+          </div>
+
+          {r.entries.length > 0 && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+              {r.entries.map(e => (
+                <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.sub, background: COLORS.paper, borderRadius: 8, padding: "5px 8px" }}>
+                  <span>{e.source}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{fmt(e.amount)}
+                    <button onClick={() => onRemoveIncome(e.id)} style={{ border: "none", background: "none", color: COLORS.coral, cursor: "pointer", fontSize: 12 }}>✕</button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {openMonth === r.key ? (
+            <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+              <input placeholder="מקור (למשל: משכורת)" value={srcDraft} onChange={e => setSrcDraft(e.target.value)} style={{ ...selectStyle, flex: 2 }} />
+              <input type="number" placeholder="סכום" value={amtDraft} onChange={e => setAmtDraft(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
+              <button onClick={() => addIncomeHere(r.key)} style={{ border: "none", borderRadius: 8, background: COLORS.sage, color: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>✓</button>
+            </div>
+          ) : (
+            <button onClick={() => setOpenMonth(r.key)} style={{ marginTop: 10, width: "100%", padding: "8px", borderRadius: 9, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>＋ הוספת הכנסה</button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev }) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newIcon, setNewIcon] = useState("📦");
+  const [editingId, setEditingId] = useState(null);
+  const active = categories.filter(c => c.active !== false);
+  const totalBudget = active.reduce((s, c) => s + (Number(monthBudgets[c.id]) || 0), 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>ניהול תקציב חודשי</div>
+        <button onClick={onCopyPrev} style={{ fontSize: 12, border: "none", background: COLORS.sageLight, color: COLORS.sage, padding: "6px 10px", borderRadius: 9, fontWeight: 600, cursor: "pointer" }}>⧉ העתק מחודש קודם</button>
+      </div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
+        {active.map((c, i) => (
+          <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === active.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+            <span style={{ fontSize: 18 }}>{c.icon}</span>
+            {editingId === c.id ? (
+              <input autoFocus defaultValue={c.name} onBlur={(e) => { onUpdateCategory(c.id, { name: e.target.value || c.name }); setEditingId(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} style={{ flex: 1, padding: "5px 8px", borderRadius: 7, border: `1px solid ${COLORS.mist}`, fontSize: 13 }} />
+            ) : (
+              <span onClick={() => setEditingId(c.id)} style={{ flex: 1, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>{c.name}</span>
+            )}
+            <input type="number" placeholder="0" defaultValue={monthBudgets[c.id] || ""} onBlur={(e) => onSetBudget(c.id, Number(e.target.value) || 0)}
+              style={{ width: 82, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
+            <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
+            <button onClick={() => onRemoveCategory(c.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
+        <span style={{ color: COLORS.sub }}>סה"כ תקציב חודשי</span>
+        <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(totalBudget)}</span>
+      </div>
+      {!adding ? (
+        <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>＋ הוספת קטגוריה</button>
+      ) : (
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 14 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+            {ICON_OPTIONS.map(ic => (
+              <button key={ic} onClick={() => setNewIcon(ic)} style={{ fontSize: 17, width: 34, height: 34, borderRadius: 9, border: `2px solid ${newIcon === ic ? COLORS.sage : COLORS.mist}`, background: newIcon === ic ? COLORS.sageLight : "#fff", cursor: "pointer" }}>{ic}</button>
+            ))}
+          </div>
+          <input placeholder="שם הקטגוריה" value={newName} onChange={e => setNewName(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 13.5, marginBottom: 10, boxSizing: "border-box" }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => { setAdding(false); setNewName(""); }} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
+            <button disabled={!newName.trim()} onClick={() => { onAddCategory(newName.trim(), newIcon); setNewName(""); setAdding(false); }} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
+          </div>
+        </div>
+      )}
+      <div style={{ height: 20 }} />
+    </div>
+  );
+}
+
+/* ================= EXPENSE MODAL ================= */
+function ExpenseModal({ categories, user, initial, onClose, onSave }) {
+  const [amount, setAmount] = useState(initial?.amount ?? "");
+  const [categoryId, setCategoryId] = useState(initial?.categoryId ?? categories[0]?.id ?? "");
+  const [date, setDate] = useState(initial?.date ?? todayISO());
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [who, setWho] = useState(initial?.user ?? user);
+  const canSave = Number(amount) > 0 && categoryId;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,33,61,0.4)", zIndex: 60, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", width: "100%", borderRadius: "20px 20px 0 0", padding: "18px 18px 26px", maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 18 }}>{initial ? "עריכת הוצאה" : "הוצאה חדשה"}</div>
+          <button onClick={onClose} style={iconBtnStyle}>✕</button>
+        </div>
+        <label style={labelStyle}>סכום</label>
+        <input autoFocus type="number" inputMode="decimal" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
+          style={{ width: "100%", padding: "14px", borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, fontSize: 22, fontWeight: 700, textAlign: "center", marginBottom: 14, boxSizing: "border-box" }} />
+        <label style={labelStyle}>קטגוריה</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+          {categories.map(c => (
+            <button key={c.id} onClick={() => setCategoryId(c.id)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 12px", borderRadius: 999, border: `1.5px solid ${categoryId === c.id ? COLORS.sage : COLORS.mist}`, background: categoryId === c.id ? COLORS.sageLight : "#fff", fontSize: 12.5, cursor: "pointer", fontWeight: 600 }}>
+              <span>{c.icon}</span>{c.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <div style={{ flex: 1 }}><label style={labelStyle}>תאריך</label><input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} /></div>
+          <div style={{ flex: 1 }}><label style={labelStyle}>מי ביצע</label><input value={who} onChange={e => setWho(e.target.value)} style={inputStyle} /></div>
+        </div>
+        <label style={labelStyle}>תיאור / הערה</label>
+        <input placeholder="למשל: קניות שבועיות" value={description} onChange={e => setDescription(e.target.value)} style={{ ...inputStyle, marginBottom: 20 }} />
+        <button disabled={!canSave} onClick={() => onSave({ id: initial?.id, amount: Number(amount), categoryId, date, description, user: who })}
+          style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: canSave ? COLORS.sage : COLORS.mist, color: "#fff", fontWeight: 800, fontSize: 15, cursor: canSave ? "pointer" : "default" }}>שמירה</button>
+      </div>
+    </div>
+  );
+}
+const labelStyle = { fontSize: 12, color: COLORS.sub, fontWeight: 600, marginBottom: 6, display: "block" };
+const inputStyle = { width: "100%", padding: "11px 12px", borderRadius: 10, border: `1.5px solid ${COLORS.mist}`, fontSize: 13.5, boxSizing: "border-box" };
+
+ReactDOM.createRoot(document.getElementById("root")).render(<BudgetApp />);
+</script>
+<script>
+  (function () {
+    var source = document.getElementById("app-source").textContent;
+    var output = Babel.transform(source, { presets: [["react", { runtime: "classic" }]] }).code;
+    var el = document.createElement("script");
+    el.text = output;
+    document.body.appendChild(el);
+  })();
+</script>
+</body>
+</html>
