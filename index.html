@@ -360,17 +360,17 @@ function BudgetApp() {
     return (
       <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ background: COLORS.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
-          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 24, color: COLORS.ink, marginBottom: 4 }}>תקציב המשפחה</div>
+          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 24, color: COLORS.ink, marginBottom: 4 }}>האתר הפיננסי של משפחת חכם</div>
           <div style={{ color: COLORS.sub, fontSize: 14, marginBottom: 20 }}>מי אתה?</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            {["אני", "בן/בת הזוג"].map(n => (
+            {["גולן", "צליל"].map(n => (
               <button key={n} onClick={() => setNameDraft(n)} style={{
                 flex: 1, padding: "12px 8px", borderRadius: 12, border: `2px solid ${nameDraft === n ? COLORS.sage : COLORS.mist}`,
                 background: nameDraft === n ? COLORS.sageLight : "#fff", color: COLORS.ink, fontWeight: 600, fontSize: 14, cursor: "pointer"
               }}>{n}</button>
             ))}
           </div>
-          <input placeholder="או הקלד/י שם משלך" value={["אני", "בן/בת הזוג"].includes(nameDraft) ? "" : nameDraft} onChange={e => setNameDraft(e.target.value)}
+          <input placeholder="או הקלד/י שם משלך" value={["גולן", "צליל"].includes(nameDraft) ? "" : nameDraft} onChange={e => setNameDraft(e.target.value)}
             style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, fontSize: 14, marginBottom: 16, boxSizing: "border-box" }} />
           <button disabled={!nameDraft.trim()} onClick={() => setUser(nameDraft.trim())} style={{
             width: "100%", padding: "13px", borderRadius: 12, border: "none", background: nameDraft.trim() ? COLORS.sage : COLORS.mist,
