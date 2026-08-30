@@ -59,7 +59,7 @@ function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [] };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [] };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -67,7 +67,24 @@ function normalizeData(d) {
     expenses: d.expenses || [],
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
+    plannedExpenses: d.plannedExpenses || [],
   };
+}
+function monthsDiff(aKey, bKey) {
+  const [ay, am] = aKey.split("-").map(Number);
+  const [by, bm] = bKey.split("-").map(Number);
+  return (by - ay) * 12 + (bm - am);
+}
+function isFixedApplicable(f, mKey) {
+  if (f.active === false) return false;
+  const freq = f.frequencyMonths || 1;
+  if (freq <= 1) return true;
+  const anchor = f.anchorMonth || mKey;
+  const diff = monthsDiff(anchor, mKey);
+  return ((diff % freq) + freq) % freq === 0;
+}
+function fixedTotalForMonth(fixedExpenses, mKey) {
+  return fixedExpenses.filter(f => isFixedApplicable(f, mKey)).reduce((s, f) => s + Number(f.amount || 0), 0);
 }
 
 async function jsonbinCreate() {
@@ -278,7 +295,9 @@ function BudgetApp() {
   const remaining = totalBudget - totalSpent;
   const overallPct = pct(totalSpent, totalBudget);
   const activeFixed = data.fixedExpenses.filter(f => f.active !== false);
-  const totalFixed = activeFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
+  const totalFixed = fixedTotalForMonth(data.fixedExpenses, mKey);
+  const monthPlanned = useMemo(() => data.plannedExpenses.filter(p => p.date && p.date.startsWith(mKey)), [data.plannedExpenses, mKey]);
+  const totalPlanned = monthPlanned.reduce((s, p) => s + Number(p.amount || 0), 0);
 
   const now = new Date();
   const isCurrentMonth = mKey === monthKey(now);
@@ -333,8 +352,8 @@ function BudgetApp() {
   };
   const deleteExpense = async (id) => { await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); showToast("ההוצאה נמחקה"); };
 
-  const addFixedExpense = async (name, amount, dueDay) => {
-    await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, active: true }] });
+  const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth) => {
+    await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, frequencyMonths: frequencyMonths || 1, anchorMonth: anchorMonth || monthKey(new Date()), active: true }] });
   };
   const updateFixedExpense = async (id, patch) => {
     await persist({ ...data, fixedExpenses: data.fixedExpenses.map(f => f.id === id ? { ...f, ...patch } : f) });
@@ -348,6 +367,13 @@ function BudgetApp() {
   };
   const removeIncome = async (id) => {
     await persist({ ...data, incomeEntries: data.incomeEntries.filter(i => i.id !== id) });
+  };
+
+  const addPlanned = async (name, amount, date) => {
+    await persist({ ...data, plannedExpenses: [...data.plannedExpenses, { id: uid(), name, amount, date }] });
+  };
+  const removePlanned = async (id) => {
+    await persist({ ...data, plannedExpenses: data.plannedExpenses.filter(p => p.id !== id) });
   };
 
   if (!activeBinId) return <SetupScreen onCreated={(id) => setActiveBinId(id)} />;
@@ -404,10 +430,12 @@ function BudgetApp() {
         )}
         {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
         {tab === "fixed" && (
-          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} />
+          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense}
+            plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onRemovePlanned={removePlanned} monthDate={monthDate} />
         )}
         {tab === "forecast" && (
-          <ForecastTab monthDate={monthDate} totalBudget={totalBudget} totalFixed={totalFixed} incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome} />
+          <ForecastTab monthDate={monthDate} totalBudget={totalBudget} fixedExpenses={data.fixedExpenses} plannedExpenses={data.plannedExpenses}
+            incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome} />
         )}
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
@@ -628,15 +656,24 @@ function ExpensesTab({ expenses, categories, onEdit, onDelete }) {
 const selectStyle = { padding: "8px 10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, background: "#fff", flex: 1, minWidth: 110 };
 
 /* ================= FIXED EXPENSES TAB ================= */
-function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove }) {
+function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [dueDay, setDueDay] = useState("1");
+  const [freq, setFreq] = useState("1");
   const active = fixedExpenses.filter(f => f.active !== false).sort((a, b) => (a.dueDay || 1) - (b.dueDay || 1));
-  const total = active.reduce((s, f) => s + Number(f.amount || 0), 0);
+  const mKey = monthKey(monthDate);
+  const total = fixedTotalForMonth(fixedExpenses, mKey);
 
-  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setAdding(false); };
+  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setAdding(false); };
+
+  const [addingPlanned, setAddingPlanned] = useState(false);
+  const [pName, setPName] = useState("");
+  const [pAmount, setPAmount] = useState("");
+  const [pDate, setPDate] = useState(todayISO());
+  const upcomingPlanned = plannedExpenses.filter(p => p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date));
+  const resetPlanned = () => { setPName(""); setPAmount(""); setPDate(todayISO()); setAddingPlanned(false); };
 
   return (
     <div>
@@ -652,39 +689,96 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <input defaultValue={f.name} onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })}
                 style={{ width: "100%", border: "none", background: "none", fontSize: 13.5, fontWeight: 600, padding: 0 }} />
-              <div style={{ fontSize: 11, color: COLORS.sub }}>חיוב בכל {f.dueDay} לחודש</div>
+              <div style={{ fontSize: 11, color: COLORS.sub }}>
+                חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"}
+              </div>
             </div>
+            <select value={String(f.frequencyMonths || 1)} onChange={(e) => onUpdate(f.id, { frequencyMonths: Number(e.target.value), anchorMonth: f.anchorMonth || mKey })}
+              style={{ fontSize: 11.5, padding: "4px 4px", borderRadius: 6, border: `1px solid ${COLORS.mist}` }}>
+              <option value="1">חודשי</option>
+              <option value="2">דו-חודשי</option>
+            </select>
             <input type="number" defaultValue={f.amount} onBlur={(e) => onUpdate(f.id, { amount: Number(e.target.value) || 0 })}
-              style={{ width: 76, padding: "6px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
+              style={{ width: 66, padding: "6px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
             <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
             <button onClick={() => onRemove(f.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
           </div>
         ))}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
-        <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות לחודש</span>
+        <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות בחודש הנוכחי</span>
         <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(total)}</span>
       </div>
 
       {!adding ? (
         <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>＋ הוספת הוצאה קבועה</button>
       ) : (
-        <div style={{ background: COLORS.card, borderRadius: 16, padding: 14 }}>
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 8 }}>
           <label style={labelStyle}>שם</label>
           <input placeholder="למשל: משכנתא" value={name} onChange={e => setName(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
-          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <div style={{ flex: 1 }}>
               <label style={labelStyle}>סכום</label>
               <input type="number" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} />
             </div>
-            <div style={{ width: 100 }}>
+            <div style={{ width: 90 }}>
               <label style={labelStyle}>יום חיוב</label>
               <input type="number" min="1" max="31" value={dueDay} onChange={e => setDueDay(e.target.value)} style={inputStyle} />
             </div>
           </div>
+          <label style={labelStyle}>תדירות</label>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {[["1", "חודשי"], ["2", "דו-חודשי (כמו חשמל/מים)"]].map(([val, lbl]) => (
+              <button key={val} onClick={() => setFreq(val)} style={{
+                flex: 1, padding: "9px 6px", borderRadius: 10, border: `1.5px solid ${freq === val ? COLORS.sage : COLORS.mist}`,
+                background: freq === val ? COLORS.sageLight : "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer"
+              }}>{lbl}</button>
+            ))}
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={reset} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
-            <button disabled={!name.trim() || !Number(amount)} onClick={() => { onAdd(name.trim(), Number(amount), Number(dueDay) || 1); reset(); }}
+            <button disabled={!name.trim() || !Number(amount)} onClick={() => { onAdd(name.trim(), Number(amount), Number(dueDay) || 1, Number(freq), mKey); reset(); }}
+              style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "22px 2px 10px" }}>הוצאות מתוכננות (חד-פעמיות)</div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 10 }}>הוצאה עתידית בתאריך ידוע — תשתקף בטאב התחזית בחודש הרלוונטי</div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
+        {upcomingPlanned.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>אין הוצאות מתוכננות קרובות</div>}
+        {upcomingPlanned.map((p, i) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === upcomingPlanned.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+            <div style={{ fontSize: 18 }}>📌</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 11, color: COLORS.sub }}>{p.date.split("-").reverse().join("/")}</div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmt(p.amount)}</div>
+            <button onClick={() => onRemovePlanned(p.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+          </div>
+        ))}
+      </div>
+
+      {!addingPlanned ? (
+        <button onClick={() => setAddingPlanned(true)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>＋ הוספת הוצאה מתוכננת</button>
+      ) : (
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 14 }}>
+          <label style={labelStyle}>שם</label>
+          <input placeholder="למשל: טיסה, תיקון רכב" value={pName} onChange={e => setPName(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
+          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>סכום</label>
+              <input type="number" placeholder="0" value={pAmount} onChange={e => setPAmount(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>תאריך</label>
+              <input type="date" value={pDate} onChange={e => setPDate(e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={resetPlanned} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
+            <button disabled={!pName.trim() || !Number(pAmount)} onClick={() => { onAddPlanned(pName.trim(), Number(pAmount), pDate); resetPlanned(); }}
               style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
           </div>
         </div>
@@ -695,7 +789,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove }) {
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, totalFixed, incomeEntries, onAddIncome, onRemoveIncome }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
@@ -713,9 +807,12 @@ function ForecastTab({ monthDate, totalBudget, totalFixed, incomeEntries, onAddI
   const rows = months.map(m => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
-    const balance = income - totalFixed - totalBudget;
+    const fixedForMonth = fixedTotalForMonth(fixedExpenses, m.key);
+    const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
+    const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
+    const balance = income - fixedForMonth - totalBudget - plannedTotal;
     running += balance;
-    return { ...m, entries, income, balance, running };
+    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, balance, running };
   });
 
   const addIncomeHere = (mKey) => {
@@ -727,7 +824,7 @@ function ForecastTab({ monthDate, totalBudget, totalFixed, incomeEntries, onAddI
   return (
     <div>
       <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 4px" }}>תחזית 6 חודשים</div>
-      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>הכנסות מול תקציב משתנה ({fmt(totalBudget)}) והוצאות קבועות ({fmt(totalFixed)}) מדי חודש</div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>הכנסות מול תקציב משתנה ({fmt(totalBudget)}), הוצאות קבועות (משתנה לפי חודש) והוצאות מתוכננות חד-פעמיות</div>
 
       {rows.map((r, idx) => (
         <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
@@ -738,11 +835,23 @@ function ForecastTab({ monthDate, totalBudget, totalFixed, incomeEntries, onAddI
             </div>
           </div>
           <Row label="הכנסות" value={fmt(r.income)} />
-          <Row label="הוצאות קבועות" value={"-" + fmt(totalFixed)} />
+          <Row label="הוצאות קבועות" value={"-" + fmt(r.fixedForMonth)} />
           <Row label="תקציב משתנה מתוכנן" value={"-" + fmt(totalBudget)} />
+          {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
           <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
             <Row label="יתרה מצטברת עד חודש זה" value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
           </div>
+
+          {r.plannedForMonth.length > 0 && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+              {r.plannedForMonth.map(p => (
+                <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 8, padding: "5px 8px" }}>
+                  <span>📌 {p.name} ({p.date.split("-").reverse().join("/")})</span>
+                  <span>{fmt(p.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {r.entries.length > 0 && (
             <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
