@@ -47,6 +47,8 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+const APP_VERSION = "9";
+const APP_VERSION_DATE = "31.08.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
@@ -437,6 +439,7 @@ function BudgetApp() {
             width: "100%", padding: "13px", borderRadius: 12, border: "none", background: nameDraft.trim() ? COLORS.sage : COLORS.mist,
             color: "#fff", fontWeight: 700, fontSize: 15, cursor: nameDraft.trim() ? "pointer" : "default"
           }}>כניסה</button>
+          <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: COLORS.sub }}>גרסה {APP_VERSION} · עודכן {APP_VERSION_DATE}</div>
         </div>
       </div>
     );
@@ -843,24 +846,24 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
   const months = useMemo(() => {
     const arr = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 1; i <= 6; i++) {
       const d = new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
-      arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}` });
+      arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}`, offset: i });
     }
     return arr;
   }, [monthDate]);
 
   let running = Number(openingBalance) || 0;
-  const rows = months.map((m, i) => {
+  const rows = months.map((m) => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
     const { direct: directFixed, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
     const fixedForMonth = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0) + creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
-    const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + i - (creditLag ? 1 : 0), 1);
+    const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
-    const autoVariableSpend = creditLag && i === 0 ? 0 : budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
     const variableSpend = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoVariableSpend;
     const balance = income - fixedForMonth - variableSpend - plannedTotal;
