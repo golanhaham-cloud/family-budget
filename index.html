@@ -59,7 +59,7 @@ function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [] };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -68,7 +68,13 @@ function normalizeData(d) {
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
     plannedExpenses: d.plannedExpenses || [],
+    settings: d.settings || { creditLag: false },
   };
+}
+function budgetTotalForMonth(budgets, categories, mKey, fallback) {
+  const monthB = budgets[mKey];
+  if (!monthB) return fallback;
+  return categories.reduce((s, c) => s + (Number(monthB[c.id]) || 0), 0);
 }
 function monthsDiff(aKey, bKey) {
   const [ay, am] = aKey.split("-").map(Number);
@@ -376,6 +382,10 @@ function BudgetApp() {
     await persist({ ...data, plannedExpenses: data.plannedExpenses.filter(p => p.id !== id) });
   };
 
+  const toggleCreditLag = async () => {
+    await persist({ ...data, settings: { ...data.settings, creditLag: !data.settings.creditLag } });
+  };
+
   if (!activeBinId) return <SetupScreen onCreated={(id) => setActiveBinId(id)} />;
 
   if (loading) {
@@ -435,7 +445,8 @@ function BudgetApp() {
         )}
         {tab === "forecast" && (
           <ForecastTab monthDate={monthDate} totalBudget={totalBudget} fixedExpenses={data.fixedExpenses} plannedExpenses={data.plannedExpenses}
-            incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome} />
+            incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome}
+            budgets={data.budgets} categories={activeCategories} creditLag={data.settings.creditLag} onToggleCreditLag={toggleCreditLag} />
         )}
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
@@ -789,7 +800,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
@@ -804,15 +815,18 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   }, [monthDate]);
 
   let running = 0;
-  const rows = months.map(m => {
+  const rows = months.map((m, i) => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
     const fixedForMonth = fixedTotalForMonth(fixedExpenses, m.key);
     const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
-    const balance = income - fixedForMonth - totalBudget - plannedTotal;
+    const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + i - (creditLag ? 1 : 0), 1);
+    const sourceMonthKey = monthKey(sourceMonthDate);
+    const variableSpend = creditLag && i === 0 ? 0 : budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const balance = income - fixedForMonth - variableSpend - plannedTotal;
     running += balance;
-    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, balance, running };
+    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, variableSpend, balance, running };
   });
 
   const addIncomeHere = (mKey) => {
@@ -823,8 +837,19 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
   return (
     <div>
-      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 4px" }}>תחזית 6 חודשים</div>
-      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>הכנסות מול תקציב משתנה ({fmt(totalBudget)}), הוצאות קבועות (משתנה לפי חודש) והוצאות מתוכננות חד-פעמיות</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 2px 4px" }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
+        <button onClick={onToggleCreditLag} style={{
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: creditLag ? COLORS.sageLight : COLORS.card,
+          color: creditLag ? COLORS.sage : COLORS.sub, padding: "6px 10px", borderRadius: 9, fontSize: 11.5, fontWeight: 600, cursor: "pointer"
+        }}>
+          💳 חיוב אשראי בחודש הבא {creditLag ? "✓" : ""}
+        </button>
+      </div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
+        הכנסות מול תקציב משתנה, הוצאות קבועות (משתנה לפי חודש) והוצאות מתוכננות חד-פעמיות
+        {creditLag && " · התקציב המשתנה מוצג בחודש שאחרי ההוצאה בפועל, כמו חיוב אשראי"}
+      </div>
 
       {rows.map((r, idx) => (
         <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
@@ -836,7 +861,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           </div>
           <Row label="הכנסות" value={fmt(r.income)} />
           <Row label="הוצאות קבועות" value={"-" + fmt(r.fixedForMonth)} />
-          <Row label="תקציב משתנה מתוכנן" value={"-" + fmt(totalBudget)} />
+          <Row label="תקציב משתנה מתוכנן" value={"-" + fmt(r.variableSpend)} />
           {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
           <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
             <Row label="יתרה מצטברת עד חודש זה" value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
