@@ -47,7 +47,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "10";
+const APP_VERSION = "11";
 const APP_VERSION_DATE = "31.08.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -427,7 +427,7 @@ function BudgetApp() {
           <div style={{ color: COLORS.sub, fontSize: 14, marginBottom: 20 }}>מי אתה?</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
             {["גולן", "צליל"].map(n => (
-              <button key={n} onClick={() => setNameDraft(n)} style={{
+              <button key={n} onClick={() => setUser(n)} style={{
                 flex: 1, padding: "12px 8px", borderRadius: 12, border: `2px solid ${nameDraft === n ? COLORS.sage : COLORS.mist}`,
                 background: nameDraft === n ? COLORS.sageLight : "#fff", color: COLORS.ink, fontWeight: 600, fontSize: 14, cursor: "pointer"
               }}>{n}</button>
