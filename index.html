@@ -59,7 +59,7 @@ function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1 } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {} } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -68,7 +68,7 @@ function normalizeData(d) {
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
     plannedExpenses: d.plannedExpenses || [],
-    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, ...(d.settings || {}) },
+    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, ...(d.settings || {}) },
   };
 }
 function budgetTotalForMonth(budgets, categories, mKey, fallback) {
@@ -91,6 +91,19 @@ function isFixedApplicable(f, mKey) {
 }
 function fixedTotalForMonth(fixedExpenses, mKey) {
   return fixedExpenses.filter(f => isFixedApplicable(f, mKey)).reduce((s, f) => s + Number(f.amount || 0), 0);
+}
+function prevMonthKey(mKey) {
+  const [y, m] = mKey.split("-").map(Number);
+  const d = new Date(y, m - 2, 1);
+  return monthKey(d);
+}
+// For forecasting cash flow: direct-debit fixed items charge in their own month on dueDay.
+// Fixed items marked onCredit were incurred in the PREVIOUS month and land on the credit billing day this month.
+function fixedForecastItemsForMonth(fixedExpenses, mKey) {
+  const direct = fixedExpenses.filter(f => f.active !== false && !f.onCredit && isFixedApplicable(f, mKey));
+  const prevKey = prevMonthKey(mKey);
+  const creditFromPrev = fixedExpenses.filter(f => f.active !== false && f.onCredit && isFixedApplicable(f, prevKey));
+  return { direct, creditFromPrev };
 }
 
 async function jsonbinCreate() {
@@ -374,6 +387,12 @@ function BudgetApp() {
   const setCreditBillingDay = async (day) => {
     await persist({ ...data, settings: { ...data.settings, creditBillingDay: day } });
   };
+  const setVariableOverride = async (mKey, val) => {
+    const next = { ...(data.settings.variableOverrides || {}) };
+    if (val === null || val === undefined) delete next[mKey];
+    else next[mKey] = val;
+    await persist({ ...data, settings: { ...data.settings, variableOverrides: next } });
+  };
   const removeIncome = async (id) => {
     await persist({ ...data, incomeEntries: data.incomeEntries.filter(i => i.id !== id) });
   };
@@ -454,7 +473,8 @@ function BudgetApp() {
             incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome}
             budgets={data.budgets} categories={activeCategories} creditLag={data.settings.creditLag} onToggleCreditLag={toggleCreditLag}
             openingBalance={data.settings.openingBalance} onSetOpeningBalance={setOpeningBalance}
-            creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay} />
+            creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay}
+            variableOverrides={data.settings.variableOverrides} onSetVariableOverride={setVariableOverride} />
         )}
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
@@ -709,9 +729,14 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
               <input defaultValue={f.name} onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })}
                 style={{ width: "100%", border: "none", background: "none", fontSize: 13.5, fontWeight: 600, padding: 0 }} />
               <div style={{ fontSize: 11, color: COLORS.sub }}>
-                חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"}
+                חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
               </div>
             </div>
+            <button onClick={() => onUpdate(f.id, { onCredit: !f.onCredit })} title="חיוב באשראי"
+              style={{
+                fontSize: 15, width: 30, height: 30, borderRadius: 8, border: `1.5px solid ${f.onCredit ? COLORS.sage : COLORS.mist}`,
+                background: f.onCredit ? COLORS.sageLight : "#fff", cursor: "pointer", flexShrink: 0
+              }}>💳</button>
             <select value={String(f.frequencyMonths || 1)} onChange={(e) => onUpdate(f.id, { frequencyMonths: Number(e.target.value), anchorMonth: f.anchorMonth || mKey })}
               style={{ fontSize: 11.5, padding: "4px 4px", borderRadius: 6, border: `1px solid ${COLORS.mist}` }}>
               <option value="1">חודשי</option>
@@ -724,6 +749,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
           </div>
         ))}
       </div>
+      <div style={{ fontSize: 11, color: COLORS.sub, margin: "-8px 2px 12px" }}>💳 = ההוצאה מחויבת באשראי ותשתקף בתחזית בחודש שאחרי, לא בחודש בו היא בוצעה</div>
       <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
         <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות בחודש הנוכחי</span>
         <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(total)}</span>
@@ -808,7 +834,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
@@ -828,13 +854,15 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const rows = months.map((m, i) => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
-    const fixedForMonth = fixedTotalForMonth(fixedExpenses, m.key);
-    const fixedItemsForMonth = fixedExpenses.filter(f => isFixedApplicable(f, m.key));
+    const { direct: directFixed, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
+    const fixedForMonth = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0) + creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + i - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
-    const variableSpend = creditLag && i === 0 ? 0 : budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const autoVariableSpend = creditLag && i === 0 ? 0 : budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
+    const variableSpend = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoVariableSpend;
     const balance = income - fixedForMonth - variableSpend - plannedTotal;
 
     const openingForMonth = running;
@@ -843,9 +871,10 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     // build day-by-day timeline
     const events = [];
     entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}`, amount: Number(e.amount) || 0 }));
-    fixedItemsForMonth.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}`, amount: -(Number(f.amount) || 0) }));
+    directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}`, amount: -(Number(f.amount) || 0) }));
+    creditFixed.forEach(f => events.push({ day: Number(creditBillingDay) || 1, label: `💳 ${f.name} (אשראי)`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
-    if (variableSpend > 0) events.push({ day: Number(creditBillingDay) || 1, label: "💳 תקציב משתנה (אשראי)", amount: -variableSpend });
+    if (variableSpend > 0) events.push({ day: Number(creditBillingDay) || 1, label: hasOverride ? "💳 תקציב משתנה (ידני)" : "💳 תקציב משתנה (אשראי)", amount: -variableSpend });
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     let bal = openingForMonth;
@@ -857,7 +886,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
       return { ...ev, after: bal };
     });
 
-    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, variableSpend, balance, running, openingForMonth, timeline, minBal, minDay };
+    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, variableSpend, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay };
   });
 
   const addIncomeHere = (mKey) => {
@@ -902,7 +931,14 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           </div>
           <Row label="הכנסות" value={fmt(r.income)} />
           <Row label="הוצאות קבועות" value={"-" + fmt(r.fixedForMonth)} />
-          <Row label="תקציב משתנה מתוכנן" value={"-" + fmt(r.variableSpend)} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
+            <span style={{ color: COLORS.sub }}>תקציב משתנה {r.hasOverride ? "(ידני)" : "(מוערך)"}</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="number" defaultValue={r.variableSpend} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
+                style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
+              {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
+            </span>
+          </div>
           {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
           <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
             <Row label="יתרה מצטברת עד חודש זה" value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
