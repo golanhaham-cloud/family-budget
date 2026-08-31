@@ -47,7 +47,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 const APP_VERSION_DATE = "31.08.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -858,15 +858,17 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
     const { direct: directFixed, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
-    const fixedForMonth = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0) + creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
+    const directFixedTotal = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
+    const creditFixedTotal = creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
     const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const autoCreditLump = creditFixedTotal + autoVariableSpend;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
-    const variableSpend = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoVariableSpend;
-    const balance = income - fixedForMonth - variableSpend - plannedTotal;
+    const creditLump = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoCreditLump;
+    const balance = income - directFixedTotal - creditLump - plannedTotal;
 
     const openingForMonth = running;
     running += balance;
@@ -875,9 +877,11 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const events = [];
     entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}`, amount: Number(e.amount) || 0 }));
     directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}`, amount: -(Number(f.amount) || 0) }));
-    creditFixed.forEach(f => events.push({ day: Number(creditBillingDay) || 1, label: `💳 ${f.name} (אשראי)`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
-    if (variableSpend > 0) events.push({ day: Number(creditBillingDay) || 1, label: hasOverride ? "💳 תקציב משתנה (ידני)" : "💳 תקציב משתנה (אשראי)", amount: -variableSpend });
+    if (creditLump > 0) {
+      const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
+      events.push({ day: Number(creditBillingDay) || 1, label, amount: -creditLump });
+    }
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     let bal = openingForMonth;
@@ -889,7 +893,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
       return { ...ev, after: bal };
     });
 
-    return { ...m, entries, income, fixedForMonth, plannedForMonth, plannedTotal, variableSpend, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay };
+    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay };
   });
 
   const addIncomeHere = (mKey) => {
@@ -933,11 +937,11 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
             </div>
           </div>
           <Row label="הכנסות" value={fmt(r.income)} />
-          <Row label="הוצאות קבועות" value={"-" + fmt(r.fixedForMonth)} />
+          <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
-            <span style={{ color: COLORS.sub }}>תקציב משתנה {r.hasOverride ? "(ידני)" : "(מוערך)"}</span>
+            <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="number" defaultValue={r.variableSpend} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
+              <input type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
                 style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
               {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
             </span>
