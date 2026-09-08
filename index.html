@@ -4,6 +4,13 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <title>תקציב המשפחה</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#2F6F5E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="תקציב המשפחה">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@500;700;800&family=Assistant:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -47,7 +54,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "11";
+const APP_VERSION = "13";
 const APP_VERSION_DATE = "31.08.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -483,6 +490,7 @@ function BudgetApp() {
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget} />
         )}
+        {tab === "advice" && <AdviceTab />}
       </div>
 
       <button onClick={() => setShowAddExpense(true)} style={{
@@ -497,6 +505,7 @@ function BudgetApp() {
         <NavBtn active={tab === "fixed"} onClick={() => setTab("fixed")} icon="📌" label="קבועות" />
         <NavBtn active={tab === "forecast"} onClick={() => setTab("forecast")} icon="📈" label="תחזית" />
         <NavBtn active={tab === "budget"} onClick={() => setTab("budget")} icon="💰" label="תקציב" />
+        <NavBtn active={tab === "advice"} onClick={() => setTab("advice")} icon="💬" label="ייעוץ" />
       </div>
 
       {(showAddExpense || editExpense) && (
@@ -1012,6 +1021,68 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   );
 }
 
+/* ================= ADVICE TAB ================= */
+function AdviceTab() {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [advice, setAdvice] = useState("");
+  const [generatedAt, setGeneratedAt] = useState(null);
+  const [error, setError] = useState("");
+
+  const getAdvice = async () => {
+    setStatus("loading");
+    setError("");
+    try {
+      const res = await fetch("/.netlify/functions/financial-advice");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "שגיאה");
+      setAdvice(json.advice);
+      setGeneratedAt(json.generatedAt);
+      setStatus("done");
+    } catch (e) {
+      setError(e.message);
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 4px" }}>חוות דעת AI</div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 14 }}>ניתוח קצר של ההתנהלות הכלכלית שלכם החודש, מבוסס על הנתונים בפועל</div>
+
+      {status !== "done" && (
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 22, textAlign: "center", marginBottom: 14 }}>
+          {status === "loading" ? (
+            <div style={{ color: COLORS.sub, fontSize: 13.5 }}>מנתח את הנתונים…</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 30, marginBottom: 10 }}>💬</div>
+              <div style={{ color: COLORS.sub, fontSize: 13, marginBottom: 16 }}>לחץ כדי לקבל חוות דעת אישית על סמך התקציב וההוצאות שלכם החודש</div>
+              <button onClick={getAdvice} style={{
+                padding: "12px 22px", borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff",
+                fontWeight: 700, fontSize: 14, cursor: "pointer"
+              }}>קבל ניתוח</button>
+              {status === "error" && <div style={{ marginTop: 12, fontSize: 12, color: COLORS.coral }}>שגיאה: {error}</div>}
+            </>
+          )}
+        </div>
+      )}
+
+      {status === "done" && (
+        <div style={{ background: COLORS.card, borderRadius: 16, padding: 18, marginBottom: 14 }}>
+          <div style={{ fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{advice}</div>
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: COLORS.sub }}>{generatedAt ? new Date(generatedAt).toLocaleString("he-IL") : ""}</span>
+            <button onClick={getAdvice} style={{
+              border: "none", background: COLORS.sageLight, color: COLORS.sage, padding: "7px 14px",
+              borderRadius: 9, fontSize: 12.5, fontWeight: 600, cursor: "pointer"
+            }}>רענן ניתוח</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -1120,6 +1191,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(<BudgetApp />);
     el.text = output;
     document.body.appendChild(el);
   })();
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
