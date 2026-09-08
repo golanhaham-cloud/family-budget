@@ -53,7 +53,7 @@ ${fixedLines.join("\n") || "אין הוצאות קבועות מוגדרות"}
 כתוב חוות דעת קצרה בעברית (עד כ-180 מילים): התייחס לקצב ההוצאה מול הזמן שעבר בחודש, ציין קטגוריה אחת או שתיים שבולטות לטובה או לרעה, ותן המלצה מעשית אחת וברורה. טון חם, ישיר, לא רובוטי ולא מטיף.`;
 
     const geminiRes = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
