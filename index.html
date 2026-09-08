@@ -54,7 +54,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "13";
+const APP_VERSION = "14";
 const APP_VERSION_DATE = "31.08.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -68,7 +68,7 @@ function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {} } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -77,7 +77,7 @@ function normalizeData(d) {
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
     plannedExpenses: d.plannedExpenses || [],
-    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, ...(d.settings || {}) },
+    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, ...(d.settings || {}) },
   };
 }
 function budgetTotalForMonth(budgets, categories, mKey, fallback) {
@@ -402,6 +402,9 @@ function BudgetApp() {
     else next[mKey] = val;
     await persist({ ...data, settings: { ...data.settings, variableOverrides: next } });
   };
+  const saveLastAdvice = async (advice, generatedAt) => {
+    await persist({ ...data, settings: { ...data.settings, lastAdvice: { advice, generatedAt } } });
+  };
   const removeIncome = async (id) => {
     await persist({ ...data, incomeEntries: data.incomeEntries.filter(i => i.id !== id) });
   };
@@ -490,7 +493,7 @@ function BudgetApp() {
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget} />
         )}
-        {tab === "advice" && <AdviceTab />}
+        {tab === "advice" && <AdviceTab lastAdvice={data.settings.lastAdvice} onSaved={saveLastAdvice} />}
       </div>
 
       <button onClick={() => setShowAddExpense(true)} style={{
@@ -1022,10 +1025,10 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 }
 
 /* ================= ADVICE TAB ================= */
-function AdviceTab() {
-  const [status, setStatus] = useState("idle"); // idle | loading | done | error
-  const [advice, setAdvice] = useState("");
-  const [generatedAt, setGeneratedAt] = useState(null);
+function AdviceTab({ lastAdvice, onSaved }) {
+  const [status, setStatus] = useState(lastAdvice ? "done" : "idle"); // idle | loading | done | error
+  const [advice, setAdvice] = useState(lastAdvice ? lastAdvice.advice : "");
+  const [generatedAt, setGeneratedAt] = useState(lastAdvice ? lastAdvice.generatedAt : null);
   const [error, setError] = useState("");
 
   const getAdvice = async () => {
@@ -1038,6 +1041,7 @@ function AdviceTab() {
       setAdvice(json.advice);
       setGeneratedAt(json.generatedAt);
       setStatus("done");
+      onSaved(json.advice, json.generatedAt);
     } catch (e) {
       setError(e.message);
       setStatus("error");
