@@ -22,6 +22,26 @@
   body { font-family: 'Assistant', sans-serif; background: #F3F6F4; -webkit-tap-highlight-color: transparent; }
   input, select { font-family: 'Assistant', sans-serif; }
   #root { min-height: 100vh; }
+  /* --- הוצאות קבועות: כרטיס לכל שורה (תצוגה בלבד) --- */
+  .fx-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 10px; padding: 12px 14px; min-width: 0; align-items: start; }
+  .fx-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+  .fx-text { flex: 1 1 0; min-width: 0; }
+  .fx-name { display: block; width: 100%; border: none; background: none; padding: 0; margin: 0; font: inherit; font-size: 15px; font-weight: 700; line-height: 1.35; resize: none; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; color: inherit; }
+  .fx-name:focus { outline: 2px solid #E4F0EC; border-radius: 6px; }
+  .fx-sub { font-size: 12px; line-height: 1.4; color: #6B7A75; margin-top: 2px; overflow-wrap: anywhere; }
+  .fx-controls { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; min-width: 0; }
+  .fx-ctl { height: 40px; border-radius: 10px; border: 1px solid #E1E8E4; background: #fff; font-size: 16px; font-family: inherit; color: inherit; min-width: 0; width: 100%; }
+  .fx-amount { display: flex; align-items: center; gap: 2px; padding: 0 6px; }
+  .fx-amount input { border: none; background: none; width: 100%; min-width: 0; font-size: 16px; font-family: inherit; text-align: center; padding: 0; height: 100%; outline: none; }
+  .fx-amount span { font-size: 13px; color: #6B7A75; }
+  .fx-freq { padding: 0 4px; font-size: 15px; }
+  .fx-credit { padding: 0 6px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .fx-del { width: 44px; height: 44px; border-radius: 10px; border: none; background: #F3F6F4; color: #E4572E; font-size: 16px; cursor: pointer; }
+  @media (min-width: 640px) {
+    .fx-card { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; }
+    .fx-controls { grid-column: auto; grid-template-columns: repeat(3, 130px); }
+    .fx-del { order: 2; width: 40px; height: 40px; }
+  }
 </style>
 </head>
 <body>
@@ -54,8 +74,8 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "14";
-const APP_VERSION_DATE = "01.09.2026";
+const APP_VERSION = "15";
+const APP_VERSION_DATE = "29.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
@@ -735,32 +755,38 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
       <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
         {active.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>עדיין לא הוגדרו הוצאות קבועות</div>}
         {active.map((f, i) => (
-          <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === active.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
-            <div style={{
-              width: 34, height: 34, borderRadius: 10, background: COLORS.sageLight, color: COLORS.sage,
-              display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12.5, flexShrink: 0
-            }}>{f.dueDay}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <input defaultValue={f.name} onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })}
-                style={{ width: "100%", border: "none", background: "none", fontSize: 13.5, fontWeight: 600, padding: 0 }} />
-              <div style={{ fontSize: 11, color: COLORS.sub }}>
-                חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
+          <div key={f.id} className="fx-card" style={{ borderBottom: i === active.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+            <div className="fx-main">
+              <div style={{
+                width: 34, height: 34, borderRadius: 10, background: COLORS.sageLight, color: COLORS.sage,
+                display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12.5, flexShrink: 0
+              }}>{f.dueDay}</div>
+              <div className="fx-text">
+                <textarea className="fx-name" rows={1} defaultValue={f.name} aria-label="שם ההוצאה"
+                  ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
+                  onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } }}
+                  onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })} />
+                <div className="fx-sub">
+                  חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
+                </div>
               </div>
             </div>
-            <button onClick={() => onUpdate(f.id, { onCredit: !f.onCredit })} title="חיוב באשראי"
-              style={{
-                fontSize: 15, width: 30, height: 30, borderRadius: 8, border: `1.5px solid ${f.onCredit ? COLORS.sage : COLORS.mist}`,
-                background: f.onCredit ? COLORS.sageLight : "#fff", cursor: "pointer", flexShrink: 0
-              }}>💳</button>
-            <select value={String(f.frequencyMonths || 1)} onChange={(e) => onUpdate(f.id, { frequencyMonths: Number(e.target.value), anchorMonth: f.anchorMonth || mKey })}
-              style={{ fontSize: 11.5, padding: "4px 4px", borderRadius: 6, border: `1px solid ${COLORS.mist}` }}>
-              <option value="1">חודשי</option>
-              <option value="2">דו-חודשי</option>
-            </select>
-            <input type="number" defaultValue={f.amount} onBlur={(e) => onUpdate(f.id, { amount: Number(e.target.value) || 0 })}
-              style={{ width: 66, padding: "6px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
-            <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
-            <button onClick={() => onRemove(f.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+            <button className="fx-del" onClick={() => onRemove(f.id)} title="מחיקה" aria-label="מחיקה">🗑</button>
+            <div className="fx-controls">
+              <label className="fx-ctl fx-amount">
+                <input type="number" inputMode="decimal" aria-label="סכום" defaultValue={f.amount} onBlur={(e) => onUpdate(f.id, { amount: Number(e.target.value) || 0 })} />
+                <span>₪</span>
+              </label>
+              <select className="fx-ctl fx-freq" aria-label="תדירות" value={String(f.frequencyMonths || 1)} onChange={(e) => onUpdate(f.id, { frequencyMonths: Number(e.target.value), anchorMonth: f.anchorMonth || mKey })}>
+                <option value="1">חודשי</option>
+                <option value="2">דו-חודשי</option>
+              </select>
+              <button className="fx-ctl fx-credit" onClick={() => onUpdate(f.id, { onCredit: !f.onCredit })} title="חיוב באשראי" aria-pressed={!!f.onCredit}
+                style={{ borderColor: f.onCredit ? COLORS.sage : COLORS.mist, background: f.onCredit ? COLORS.sageLight : "#fff" }}>
+                💳 {f.onCredit ? "אשראי" : "ישיר"}
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -843,7 +869,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
           </div>
         </div>
       )}
-      <div style={{ height: 20 }} />
+      <div style={{ height: 80 }} />
     </div>
   );
 }
