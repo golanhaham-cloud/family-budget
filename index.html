@@ -36,6 +36,7 @@
   .fx-amount span { font-size: 13px; color: #6B7A75; }
   .fx-freq { padding: 0 4px; font-size: 15px; }
   .fx-credit { padding: 0 6px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .fx-panel { order: 5; }
   .fx-del { width: 44px; height: 44px; border-radius: 10px; border: none; background: #F3F6F4; color: #E4572E; font-size: 16px; cursor: pointer; }
   @media (min-width: 640px) {
     .fx-card { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; }
@@ -74,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "16";
+const APP_VERSION = "18";
 const APP_VERSION_DATE = "29.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -84,6 +85,35 @@ function todayISO() { const t = new Date(); return `${t.getFullYear()}-${String(
 function fmt(n) { const v = Math.round(Number(n) || 0); return `${v.toLocaleString("he-IL")} ₪`; }
 function pct(spent, budget) { if (!budget || budget <= 0) return spent > 0 ? 999 : 0; return (spent / budget) * 100; }
 function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return COLORS.amber; return COLORS.sage; }
+
+/* ---------- התראות תקציב (השוואה באגורות, לפי הדיוק הכספי של המערכת) ---------- */
+const NEAR_BUDGET_PCT = 80; // סף ההתקרבות הקיים
+const toAgorot = (v) => Math.round((Number(v) || 0) * 100); // מנרמל שגיאות נקודה צפה (0.1+0.2) בלי לשנות את הסכום השמור
+function fmtAgorot(ag) {
+  if (ag > 0 && ag < 100) return "פחות מ־1 ₪";
+  return `${(ag / 100).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₪`;
+}
+function categoryBudgetState(budget, spent) {
+  const b = toAgorot(budget), sp = toAgorot(spent);
+  if (b <= 0) return { state: "none", diffAg: 0 };
+  const diff = sp - b;
+  if (diff > 0) return { state: "over", diffAg: diff };
+  if (diff === 0) return { state: "full", diffAg: 0 };
+  if ((sp / b) * 100 >= NEAR_BUDGET_PCT) return { state: "near", diffAg: diff, pct: (sp / b) * 100 };
+  return { state: "ok", diffAg: diff };
+}
+function buildBudgetAlerts(perCategory, paceHigh, projected) {
+  const over = [], near = [], full = [];
+  perCategory.forEach(c => {
+    const r = categoryBudgetState(c.budget, c.spent);
+    if (r.state === "over") over.push({ kind: "over", key: c.id, w: r.diffAg, text: `${c.icon} ${c.name} — חריגה של ${r.diffAg < 100 ? "פחות מ־1 ₪" : fmtAgorot(r.diffAg)}` });
+    else if (r.state === "near") near.push({ kind: "near", key: c.id, w: r.pct, text: `${c.icon} ${c.name} — מתקרב לתקציב, נותרו ${fmtAgorot(-r.diffAg)}` });
+    else if (r.state === "full") full.push({ kind: "full", key: c.id, w: 0, text: `${c.icon} ${c.name} — התקציב נוצל במלואו` });
+  });
+  over.sort((x, y) => y.w - x.w); near.sort((x, y) => y.w - x.w);
+  const pace = paceHigh ? [{ kind: "pace", key: "pace", text: `קצב ההוצאות הכללי גבוה — צפי לסיים בכ־${fmt(projected)}` }] : [];
+  return [...over, ...pace, ...near, ...full];
+}
 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
@@ -110,13 +140,45 @@ function monthsDiff(aKey, bKey) {
   const [by, bm] = bKey.split("-").map(Number);
   return (by - ay) * 12 + (bm - am);
 }
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+// תקופת תוקף חודשית (YYYY-MM, כולל קצוות). שדה ריק/לא תקין = ללא גבול, כך שרשומות ישנות מתנהגות בדיוק כמו קודם.
+function isFixedInPeriod(f, mKey) {
+  if (MONTH_RE.test(f.effectiveFrom || "") && mKey < f.effectiveFrom) return false;
+  if (MONTH_RE.test(f.effectiveTo || "") && mKey > f.effectiveTo) return false;
+  return true;
+}
 function isFixedApplicable(f, mKey) {
   if (f.active === false) return false;
+  if (!isFixedInPeriod(f, mKey)) return false;
   const freq = f.frequencyMonths || 1;
   if (freq <= 1) return true;
   const anchor = f.anchorMonth || mKey;
   const diff = monthsDiff(anchor, mKey);
   return ((diff % freq) + freq) % freq === 0;
+}
+function fixedFreqLabel(freq) {
+  const n = freq || 1;
+  return n === 1 ? "חודשי" : n === 2 ? "דו-חודשי" : n === 12 ? "שנתי" : `כל ${n} חודשים`;
+}
+// בדיקת חפיפה בין תקופות של אותה הוצאה (אותו seriesId). גבול ריק = אינסוף.
+function periodsOverlap(aFrom, aTo, bFrom, bTo) {
+  const lo = (x) => (MONTH_RE.test(x || "") ? x : "0000-00");
+  const hi = (x) => (MONTH_RE.test(x || "") ? x : "9999-99");
+  return lo(aFrom) <= hi(bTo) && lo(bFrom) <= hi(aTo);
+}
+function validateFixedPeriod(from, to, siblings) {
+  if (MONTH_RE.test(from || "") && MONTH_RE.test(to || "") && to < from) return "חודש הסיום לא יכול להיות לפני חודש ההתחלה";
+  const clash = (siblings || []).find(x => periodsOverlap(from, to, x.effectiveFrom, x.effectiveTo));
+  if (clash) return "התקופה חופפת להגדרה אחרת של אותה הוצאה, והסכום היה נספר פעמיים";
+  return "";
+}
+function validateAmountChange(f, fromMonth, newAmount) {
+  if (!MONTH_RE.test(fromMonth || "")) return "יש לבחור חודש";
+  if (!(Number(newAmount) > 0)) return "הסכום החדש חייב להיות גדול מאפס";
+  if (Number(newAmount) === Number(f.amount)) return "הסכום החדש זהה לסכום הנוכחי";
+  if (MONTH_RE.test(f.effectiveFrom || "") && fromMonth <= f.effectiveFrom) return "חודש השינוי חייב להיות אחרי חודש ההתחלה של ההגדרה הנוכחית";
+  if (MONTH_RE.test(f.effectiveTo || "") && fromMonth > f.effectiveTo) return "חודש השינוי חורג מתקופת התוקף של ההגדרה";
+  return "";
 }
 function fixedTotalForMonth(fixedExpenses, mKey) {
   return fixedExpenses.filter(f => isFixedApplicable(f, mKey)).reduce((s, f) => s + Number(f.amount || 0), 0);
@@ -362,17 +424,7 @@ function BudgetApp() {
     return { ...c, budget, spent, percent: pct(spent, budget), remaining: budget - spent };
   }), [activeCategories, monthBudgets, monthExpenses]);
 
-  const alerts = useMemo(() => {
-    const list = [];
-    perCategory.forEach(c => {
-      if (c.budget <= 0) return;
-      if (c.percent >= 100) list.push({ type: "coral", text: `${c.icon} ${c.name} — חריגה של ${fmt(c.spent - c.budget)}` });
-      else if (c.percent >= 90) list.push({ type: "coral", text: `${c.icon} ${c.name} כמעט בחריגה — נותרו ${fmt(c.remaining)}` });
-      else if (c.percent >= 80) list.push({ type: "amber", text: `${c.icon} ${c.name} מתקרב לתקציב — נותרו ${fmt(c.remaining)}` });
-    });
-    if (paceHigh) list.push({ type: "amber", text: `⚠️ קצב ההוצאות הכללי גבוה — צפי לסיים בכ־${fmt(projected)}` });
-    return list;
-  }, [perCategory, paceHigh, projected]);
+  const alerts = useMemo(() => buildBudgetAlerts(perCategory, paceHigh, projected), [perCategory, paceHigh, projected]);
 
   const changeMonth = (delta) => { const d = new Date(monthDate); d.setMonth(d.getMonth() + delta); setMonthDate(d); };
 
@@ -400,11 +452,21 @@ function BudgetApp() {
   };
   const deleteExpense = async (id) => { await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); showToast("ההוצאה נמחקה"); };
 
-  const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth) => {
-    await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, frequencyMonths: frequencyMonths || 1, anchorMonth: anchorMonth || monthKey(new Date()), active: true }] });
+  const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth, effectiveFrom, effectiveTo) => {
+    const period = {}; if (effectiveFrom) period.effectiveFrom = effectiveFrom; if (effectiveTo) period.effectiveTo = effectiveTo;
+    await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, frequencyMonths: frequencyMonths || 1, anchorMonth: anchorMonth || monthKey(new Date()), active: true, ...period }] });
   };
   const updateFixedExpense = async (id, patch) => {
     await persist({ ...data, fixedExpenses: data.fixedExpenses.map(f => f.id === id ? { ...f, ...patch } : f) });
+  };
+  // שינוי סכום החל מחודש: ההגדרה הקיימת נשמרת עד החודש שלפני, והחדשה מתחילה מהחודש שנבחר (פעולה אחת, בלי חפיפה ובלי דריסת העבר)
+  const splitFixedExpense = async (id, fromMonth, newAmount) => {
+    const old = data.fixedExpenses.find(f => f.id === id);
+    if (!old || validateAmountChange(old, fromMonth, newAmount)) return;
+    const sid = old.seriesId || old.id;
+    const oldRec = { ...old, seriesId: sid, effectiveTo: prevMonthKey(fromMonth) };
+    const newRec = { ...old, id: uid(), seriesId: sid, amount: Number(newAmount), effectiveFrom: fromMonth, effectiveTo: old.effectiveTo || null };
+    await persist({ ...data, fixedExpenses: [...data.fixedExpenses.map(f => f.id === id ? oldRec : f), newRec] });
   };
   const removeFixedExpense = async (id) => {
     await persist({ ...data, fixedExpenses: data.fixedExpenses.filter(f => f.id !== id) });
@@ -503,7 +565,7 @@ function BudgetApp() {
         )}
         {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
         {tab === "fixed" && (
-          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense}
+          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} onSplit={splitFixedExpense}
             plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onRemovePlanned={removePlanned} monthDate={monthDate} />
         )}
         {tab === "forecast" && (
@@ -519,7 +581,7 @@ function BudgetApp() {
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget} />
         )}
         {tab === "advice" && <AdviceTab key={mKey} monthDate={monthDate} perCategory={perCategory} totalBudget={totalBudget} totalSpent={totalSpent}
-          fixedExpenses={activeFixed} advices={data.settings.advices || []} legacyAdvice={data.settings.lastAdvice} onSaved={saveAdvice} />}
+          fixedExpenses={activeFixed.filter(f => isFixedInPeriod(f, mKey))} advices={data.settings.advices || []} legacyAdvice={data.settings.lastAdvice} onSaved={saveAdvice} />}
       </div>
 
       <button onClick={() => setShowAddExpense(true)} style={{
@@ -557,6 +619,43 @@ function NavBtn({ active, onClick, icon, label }) {
 }
 
 /* ================= DASHBOARD ================= */
+/* ================= ALERTS SUMMARY ================= */
+const ALERT_STYLE = {
+  over: { bg: COLORS.coralLight, fg: COLORS.coral, icon: "●", label: (n) => n === 1 ? "חריגה אחת" : `${n} חריגות` },
+  pace: { bg: COLORS.amberLight, fg: "#8a6400", icon: "◔", label: () => "קצב גבוה" },
+  near: { bg: COLORS.amberLight, fg: "#8a6400", icon: "●", label: (n) => n === 1 ? "קטגוריה מתקרבת" : `${n} מתקרבות` },
+  full: { bg: COLORS.sageLight, fg: COLORS.sage, icon: "✓", label: (n) => n === 1 ? "נוצל במלואו" : `${n} נוצלו במלואם` },
+};
+function AlertsSummary({ alerts }) {
+  const [open, setOpen] = useState(false);
+  if (!alerts.length) return null;
+  const counts = {}; alerts.forEach(a => { counts[a.kind] = (counts[a.kind] || 0) + 1; });
+  const kinds = ["over", "pace", "near", "full"].filter(k => counts[k]);
+  return (
+    <div style={{ marginBottom: 14, background: COLORS.card, borderRadius: 14, boxShadow: "0 2px 10px rgba(20,33,61,0.04)", overflow: "hidden" }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{
+        width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", border: "none", background: "none", cursor: "pointer", minHeight: 44, textAlign: "start", color: COLORS.ink
+      }}>
+        <span style={{ display: "flex", flexWrap: "wrap", gap: 6, flex: 1, minWidth: 0 }}>
+          {kinds.map(k => (
+            <span key={k} style={{ background: ALERT_STYLE[k].bg, color: ALERT_STYLE[k].fg, borderRadius: 999, padding: "4px 10px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+              {ALERT_STYLE[k].icon} {ALERT_STYLE[k].label(counts[k])}
+            </span>
+          ))}
+        </span>
+        <span style={{ fontSize: 12, color: COLORS.sub, whiteSpace: "nowrap" }}>{open ? "הסתר פירוט ▴" : "הצג פירוט ▾"}</span>
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "0 12px 12px" }}>
+          {alerts.map(a => (
+            <div key={a.kind + a.key} style={{ padding: "9px 12px", borderRadius: 10, background: ALERT_STYLE[a.kind].bg, color: ALERT_STYLE[a.kind].fg, fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" }}>{a.text}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense }) {
   const gaugeColor = statusColor(overallPct);
   const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
@@ -600,15 +699,7 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
         )}
       </div>
 
-      {alerts.length > 0 && (
-        <div style={{ marginBottom: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-          {alerts.map((a, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 12, background: a.type === "coral" ? COLORS.coralLight : COLORS.amberLight, color: a.type === "coral" ? COLORS.coral : "#8a6400", fontSize: 13, fontWeight: 600 }}>
-              ⚠️ {a.text}
-            </div>
-          ))}
-        </div>
-      )}
+      <AlertsSummary alerts={alerts} />
 
       <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 8px" }}>קטגוריות</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
@@ -622,9 +713,12 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 11.5, color: COLORS.sub }}>
               <span>{fmt(c.spent)}</span><span>{fmt(c.budget)}</span>
             </div>
-            {c.percent >= 100 && c.budget > 0
-              ? <div style={{ marginTop: 5, fontSize: 11, fontWeight: 700, color: COLORS.coral }}>חריגה של {fmt(c.spent - c.budget)}</div>
-              : <div style={{ marginTop: 5, fontSize: 11, color: COLORS.sub }}>נשאר {fmt(c.remaining)}</div>}
+            {(() => {
+              const st = categoryBudgetState(c.budget, c.spent);
+              if (st.state === "over") return <div style={{ marginTop: 5, fontSize: 11, fontWeight: 700, color: COLORS.coral }}>חריגה של {fmtAgorot(st.diffAg)}</div>;
+              if (st.state === "full") return <div style={{ marginTop: 5, fontSize: 11, fontWeight: 700, color: COLORS.sage }}>התקציב נוצל במלואו</div>;
+              return <div style={{ marginTop: 5, fontSize: 11, color: COLORS.sub }}>נשאר {fmt(c.remaining)}</div>;
+            })()}
           </div>
         ))}
       </div>
@@ -735,18 +829,111 @@ function ExpensesTab({ expenses, categories, onEdit, onDelete }) {
 }
 const selectStyle = { padding: "8px 10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, background: "#fff", flex: 1, minWidth: 110 };
 
+/* ================= FIXED EXPENSE PERIODS ================= */
+function monthLabelOf(k) { const m = /^(\d{4})-(\d{2})$/.exec(k || ""); return m ? `${HEBREW_MONTHS[Number(m[2]) - 1]} ${m[1]}` : ""; }
+function MonthPicker({ value, onChange, allowEmpty, label }) {
+  const nowY = new Date().getFullYear();
+  const [y, m] = MONTH_RE.test(value || "") ? value.split("-") : ["", ""];
+  const years = []; for (let i = nowY - 2; i <= nowY + 6; i++) years.push(String(i));
+  if (y && !years.includes(y)) years.push(y);
+  const set = (ny, nm) => { if (!ny && !nm) return onChange(""); onChange(`${ny || String(nowY)}-${nm || "01"}`); };
+  const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 16, fontFamily: "inherit", minWidth: 0, flex: 1, padding: "0 6px" };
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select aria-label={label + " - חודש"} value={m} onChange={e => set(y, e.target.value)} style={sel}>
+          {allowEmpty && <option value="">ללא הגבלה</option>}
+          {HEBREW_MONTHS.map((n, i) => <option key={i} value={String(i + 1).padStart(2, "0")}>{n}</option>)}
+        </select>
+        <select aria-label={label + " - שנה"} value={y} onChange={e => set(e.target.value, m)} style={{ ...sel, flex: "0 0 86px" }} disabled={allowEmpty && !m}>
+          {allowEmpty && !y && <option value=""></option>}
+          {years.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+function FixedPeriodPanel({ f, mKey, siblings, onUpdate, onSplit, onClose }) {
+  const [from, setFrom] = useState(f.effectiveFrom || "");
+  const [to, setTo] = useState(f.effectiveTo || "");
+  const [err, setErr] = useState("");
+  const [chgMonth, setChgMonth] = useState(MONTH_RE.test(f.effectiveFrom || "") && mKey <= f.effectiveFrom ? "" : mKey);
+  const [chgAmount, setChgAmount] = useState("");
+  const [err2, setErr2] = useState("");
+  const chgErr = chgMonth && chgAmount !== "" ? validateAmountChange(f, chgMonth, chgAmount) : "";
+  const box = { background: COLORS.paper, borderRadius: 12, padding: 12, marginTop: 8 };
+  const btn = (primary) => ({ flex: 1, minHeight: 42, borderRadius: 10, border: primary ? "none" : `1px solid ${COLORS.mist}`, background: primary ? COLORS.sage : "#fff", color: primary ? "#fff" : COLORS.ink, fontWeight: 700, fontSize: 13.5, cursor: "pointer" });
+  const savePeriod = () => {
+    const e = validateFixedPeriod(from, to, siblings);
+    if (e) return setErr(e);
+    setErr(""); onUpdate(f.id, { effectiveFrom: from || null, effectiveTo: to || null }); onClose();
+  };
+  const applyChange = () => {
+    const e = validateAmountChange(f, chgMonth, chgAmount);
+    if (e) return setErr2(e);
+    onSplit(f.id, chgMonth, Number(chgAmount)); onClose();
+  };
+  return (
+    <div className="fx-panel" style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+      <div style={box}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>תקופת תוקף</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+          <MonthPicker label="החל מחודש" value={from} onChange={setFrom} allowEmpty />
+          <MonthPicker label="עד חודש" value={to} onChange={setTo} allowEmpty />
+        </div>
+        <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6 }}>החודשים כלולים בתקופה. "ללא הגבלה" = בלי גבול בצד הזה. היסטוריה לא נמחקת, והתדירות וחודש העוגן ({fixedFreqLabel(f.frequencyMonths)}) לא משתנים.</div>
+        {err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginTop: 6 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick={onClose} style={btn(false)}>סגירה</button>
+          <button onClick={savePeriod} style={btn(true)}>שמירת תוקף</button>
+        </div>
+      </div>
+      <div style={box}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>שינוי סכום החל מחודש</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+          <MonthPicker label="החל מחודש" value={chgMonth} onChange={setChgMonth} />
+          <div>
+            <label style={labelStyle}>סכום חדש (₪)</label>
+            <input type="number" inputMode="decimal" value={chgAmount} onChange={e => setChgAmount(e.target.value)} placeholder={String(f.amount)}
+              style={{ ...inputStyle, height: 40, fontSize: 16 }} />
+          </div>
+        </div>
+        {chgMonth && chgAmount !== "" && !chgErr && (
+          <div style={{ fontSize: 12.5, marginTop: 8, lineHeight: 1.5, background: COLORS.sageLight, borderRadius: 10, padding: "8px 10px" }}>
+            הסכום הנוכחי {fmt(f.amount)} יישמר עד {monthLabelOf(prevMonthKey(chgMonth))}, והסכום החדש {fmt(chgAmount)} יחול מ־{monthLabelOf(chgMonth)}. חודשים קודמים לא ישתנו.
+          </div>
+        )}
+        {(chgErr || err2) && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginTop: 6 }}>{chgErr || err2}</div>}
+        <button onClick={applyChange} disabled={!chgMonth || chgAmount === "" || !!chgErr} style={{ ...btn(true), width: "100%", marginTop: 10, opacity: (!chgMonth || chgAmount === "" || chgErr) ? 0.5 : 1 }}>
+          {chgMonth ? `אישור: החל מ־${monthLabelOf(chgMonth)}` : "בחר חודש"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ================= FIXED EXPENSES TAB ================= */
-function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
+function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [dueDay, setDueDay] = useState("1");
   const [freq, setFreq] = useState("1");
-  const active = fixedExpenses.filter(f => f.active !== false).sort((a, b) => (a.dueDay || 1) - (b.dueDay || 1));
   const mKey = monthKey(monthDate);
+  const [editingId, setEditingId] = useState(null);
+  const [fromM, setFromM] = useState("");
+  const [toM, setToM] = useState("");
+  const [addErr, setAddErr] = useState("");
+  const [showEnded, setShowEnded] = useState(false);
+  const byDay = (a, b) => (a.dueDay || 1) - (b.dueDay || 1) || String(a.effectiveFrom || "").localeCompare(String(b.effectiveFrom || ""));
+  const allActive = fixedExpenses.filter(f => f.active !== false);
+  // הוצאות שהסתיימו לפני החודש הנבחר מוצגות בנפרד (ההיסטוריה נשמרת); כל השאר בדיוק כמו קודם
+  const ended = allActive.filter(f => MONTH_RE.test(f.effectiveTo || "") && f.effectiveTo < mKey).sort(byDay);
+  const active = allActive.filter(f => !ended.includes(f)).sort(byDay);
   const total = fixedTotalForMonth(fixedExpenses, mKey);
 
-  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setAdding(false); };
+  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setFromM(""); setToM(""); setAddErr(""); setAdding(false); };
 
   const [addingPlanned, setAddingPlanned] = useState(false);
   const [pName, setPName] = useState("");
@@ -755,13 +942,8 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
   const upcomingPlanned = plannedExpenses.filter(p => p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date));
   const resetPlanned = () => { setPName(""); setPAmount(""); setPDate(todayISO()); setAddingPlanned(false); };
 
-  return (
-    <div>
-      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 10px" }}>הוצאות קבועות</div>
-      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
-        {active.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>עדיין לא הוגדרו הוצאות קבועות</div>}
-        {active.map((f, i) => (
-          <div key={f.id} className="fx-card" style={{ borderBottom: i === active.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+  const renderFixedRow = (f, i, list) => (
+          <div key={f.id} className="fx-card" style={{ borderBottom: i === list.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
             <div className="fx-main">
               <div style={{
                 width: 34, height: 34, borderRadius: 10, background: COLORS.sageLight, color: COLORS.sage,
@@ -774,8 +956,17 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } }}
                   onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })} />
                 <div className="fx-sub">
-                  חיוב בכל {f.dueDay} לחודש · {(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
+                  חיוב בכל {f.dueDay} לחודש · {fixedFreqLabel(f.frequencyMonths)} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
                 </div>
+                {(f.effectiveFrom || f.effectiveTo) && (
+                  <div className="fx-sub" style={{ color: COLORS.sage, fontWeight: 600 }}>
+                    תוקף: {f.effectiveFrom ? `מ־${monthLabelOf(f.effectiveFrom)}` : "ללא התחלה"}{f.effectiveTo ? ` עד ${monthLabelOf(f.effectiveTo)}` : " ללא הגבלה"}
+                  </div>
+                )}
+                <button onClick={() => setEditingId(editingId === f.id ? null : f.id)} aria-expanded={editingId === f.id}
+                  style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: "6px 0", minHeight: 32, textDecoration: "underline" }}>
+                  {editingId === f.id ? "סגירת עריכת תוקף" : "תוקף ושינוי סכום"}
+                </button>
               </div>
             </div>
             <button className="fx-del" onClick={() => onRemove(f.id)} title="מחיקה" aria-label="מחיקה">🗑</button>
@@ -793,9 +984,28 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
                 💳 {f.onCredit ? "אשראי" : "ישיר"}
               </button>
             </div>
+            {editingId === f.id && (
+              <FixedPeriodPanel f={f} mKey={mKey} siblings={f.seriesId ? fixedExpenses.filter(x => x.seriesId === f.seriesId && x.id !== f.id && x.active !== false) : []}
+                onUpdate={onUpdate} onSplit={onSplit} onClose={() => setEditingId(null)} />
+            )}
           </div>
-        ))}
+  );
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 10px" }}>הוצאות קבועות</div>
+      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
+        {active.length === 0 && ended.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>עדיין לא הוגדרו הוצאות קבועות</div>}
+        {active.map((f, i) => renderFixedRow(f, i, active))}
       </div>
+      {ended.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <button onClick={() => setShowEnded(v => !v)} aria-expanded={showEnded} style={{ border: "none", background: "none", fontSize: 13, fontWeight: 700, color: COLORS.sub, cursor: "pointer", minHeight: 40, padding: "0 2px" }}>
+            {showEnded ? "▴" : "▾"} הוצאות שהסתיימו לפני {monthLabelOf(mKey)} ({ended.length})
+          </button>
+          {showEnded && <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", opacity: 0.9 }}>{ended.map((f, i) => renderFixedRow(f, i, ended))}</div>}
+        </div>
+      )}
       <div style={{ fontSize: 11, color: COLORS.sub, margin: "-8px 2px 12px" }}>💳 = ההוצאה מחויבת באשראי ותשתקף בתחזית בחודש שאחרי, לא בחודש בו היא בוצעה</div>
       <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
         <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות בחודש הנוכחי</span>
@@ -818,6 +1028,11 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
               <input type="number" min="1" max="31" value={dueDay} onChange={e => setDueDay(e.target.value)} style={inputStyle} />
             </div>
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 10 }}>
+            <MonthPicker label="החל מחודש (לא חובה)" value={fromM} onChange={setFromM} allowEmpty />
+            <MonthPicker label="עד חודש (לא חובה)" value={toM} onChange={setToM} allowEmpty />
+          </div>
+          {addErr && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{addErr}</div>}
           <label style={labelStyle}>תדירות</label>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             {[["1", "חודשי"], ["2", "דו-חודשי (כמו חשמל/מים)"]].map(([val, lbl]) => (
@@ -829,7 +1044,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, plannedExp
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={reset} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
-            <button disabled={!name.trim() || !Number(amount)} onClick={() => { onAdd(name.trim(), Number(amount), Number(dueDay) || 1, Number(freq), mKey); reset(); }}
+            <button disabled={!name.trim() || !Number(amount)} onClick={() => { const e = validateFixedPeriod(fromM, toM, []); if (e) return setAddErr(e); onAdd(name.trim(), Number(amount), Number(dueDay) || 1, Number(freq), mKey, fromM || null, toM || null); reset(); }}
               style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
           </div>
         </div>
@@ -920,7 +1135,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     // build day-by-day timeline
     const events = [];
     entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}`, amount: Number(e.amount) || 0 }));
-    directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}`, amount: -(Number(f.amount) || 0) }));
+    directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
     if (creditLump > 0) {
       const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
