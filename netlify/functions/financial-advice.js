@@ -1,75 +1,50 @@
-const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
-const JSONBIN_ID = "6a84c53fda38895dfef45d8e";
+// Netlify Function: ייעוץ פיננסי. מקבל POST עם נתוני החודש הנבחר (period = YYYY-MM) ומחזיר ניתוח + התקופה שעליה הוא מבוסס.
+const MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+const num = (v) => Number(v) || 0;
+const json = (statusCode, obj) => ({ statusCode, headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(obj) });
 
-function monthKey(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-exports.handler = async function () {
+exports.handler = async function (event) {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) {
-    return { statusCode: 500, body: JSON.stringify({ error: "GEMINI_API_KEY לא מוגדר בהגדרות הסביבה של נטליפיי" }) };
-  }
+  if (!GEMINI_API_KEY) return json(500, { error: "GEMINI_API_KEY לא מוגדר בהגדרות הסביבה של נטליפיי" });
+  if (event.httpMethod !== "POST") return json(405, { error: "יש לשלוח את נתוני החודש בבקשת POST" });
 
   try {
-    const getRes = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, {
-      headers: { "X-Master-Key": JSONBIN_KEY },
-    });
-    if (!getRes.ok) throw new Error("שליפת הנתונים נכשלה");
-    const getJson = await getRes.json();
-    const record = getJson.record;
+    const p = JSON.parse(event.body || "{}");
+    const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(p.period || "");
+    if (!m) return json(400, { error: "תקופה לא תקינה" });
+    const label = `${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+    const dim = num(p.daysInMonth) || 30;
+    const passed = Math.max(0, Math.min(dim, num(p.daysPassed)));
+    const timeLine = passed >= dim ? `החודש ${label} הסתיים (כל ${dim} הימים עברו)`
+      : passed === 0 ? `החודש ${label} טרם החל`
+      : `${passed} מתוך ${dim} ימים עברו מחודש ${label}`;
 
-    const mKey = monthKey(new Date());
-    const budgets = (record.budgets && record.budgets[mKey]) || {};
-    const categories = (record.categories || []).filter((c) => c.active !== false);
-    const expenses = (record.expenses || []).filter((e) => e.date && e.date.startsWith(mKey));
+    const catLines = (p.categories || []).map((c) => `- ${c.name}: תקציב ${num(c.budget)} ₪, הוצאה בפועל ${num(c.spent)} ₪`);
+    const fixedLines = (p.fixed || []).map((f) => `- ${f.name}: ${num(f.amount)} ₪ (${f.onCredit ? "אשראי" : "חיוב ישיר"}, ${num(f.frequencyMonths) > 1 ? "דו-חודשי" : "חודשי"})`);
 
-    const perCategoryLines = categories.map((c) => {
-      const budget = Number(budgets[c.id]) || 0;
-      const spent = expenses.filter((e) => e.categoryId === c.id).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-      return `- ${c.name}: תקציב ${budget} ₪, הוצאה בפועל ${spent} ₪`;
-    });
-
-    const fixedLines = (record.fixedExpenses || [])
-      .filter((f) => f.active !== false)
-      .map((f) => `- ${f.name}: ${f.amount} ₪ (${f.onCredit ? "אשראי" : "חיוב ישיר"}, ${(f.frequencyMonths || 1) > 1 ? "דו-חודשי" : "חודשי"})`);
-
-    const totalBudget = categories.reduce((s, c) => s + (Number(budgets[c.id]) || 0), 0);
-    const totalSpent = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    const now = new Date();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const daysPassed = now.getDate();
-
-    const prompt = `אתה יועץ פיננסי משפחתי חם וישיר. הנה נתוני התקציב המשתנה החודשי של משפחה (${daysPassed} מתוך ${daysInMonth} ימים עברו החודש):
+    const prompt = `אתה יועץ פיננסי משפחתי חם וישיר. הנה נתוני התקציב המשתנה של משפחה לחודש ${label} (${timeLine}):
 
 קטגוריות (תקציב מול הוצאה בפועל):
-${perCategoryLines.join("\n") || "אין נתוני קטגוריות"}
+${catLines.join("\n") || "אין נתוני קטגוריות"}
 
-סה"כ תקציב משתנה: ${totalBudget} ₪, סה"כ הוצאה בפועל: ${totalSpent} ₪
+סה"כ תקציב משתנה: ${num(p.totalBudget)} ₪, סה"כ הוצאה בפועל: ${num(p.totalSpent)} ₪
 
-הוצאות קבועות חודשיות:
+הוצאות קבועות:
 ${fixedLines.join("\n") || "אין הוצאות קבועות מוגדרות"}
 
-כתוב חוות דעת קצרה בעברית (עד כ-180 מילים): התייחס לקצב ההוצאה מול הזמן שעבר בחודש, ציין קטגוריה אחת או שתיים שבולטות לטובה או לרעה, ותן המלצה מעשית אחת וברורה. טון חם, ישיר, לא רובוטי ולא מטיף.`;
+כתוב חוות דעת קצרה בעברית (עד כ-180 מילים) על חודש ${label} בלבד: התייחס לקצב ההוצאה מול הזמן שעבר, ציין קטגוריה אחת או שתיים שבולטות לטובה או לרעה, ותן המלצה מעשית אחת וברורה. טון חם, ישיר, לא רובוטי ולא מטיף.`;
 
-    const geminiRes = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      }
-    );
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
-      throw new Error("שגיאה מול Gemini: " + errText.slice(0, 200));
-    }
-    const geminiJson = await geminiRes.json();
-    const advice =
-      geminiJson.candidates?.[0]?.content?.parts?.[0]?.text || "לא התקבלה תשובה מהמודל. נסה שוב בעוד רגע.";
-
-    return { statusCode: 200, body: JSON.stringify({ advice, generatedAt: Date.now() }) };
+    const geminiRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!geminiRes.ok) throw new Error("שגיאה מול Gemini: " + (await geminiRes.text()).slice(0, 200));
+    const g = await geminiRes.json();
+    const advice = g.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!advice) throw new Error("לא התקבלה תשובה מהמודל. נסה שוב בעוד רגע.");
+    return json(200, { advice, generatedAt: Date.now(), period: p.period });
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+    return json(500, { error: e.message });
   }
 };
