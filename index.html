@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "18";
+const APP_VERSION = "19";
 const APP_VERSION_DATE = "29.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -118,7 +118,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [] } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -127,7 +127,7 @@ function normalizeData(d) {
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
     plannedExpenses: d.plannedExpenses || [],
-    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], ...(d.settings || {}) },
+    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
 }
 function budgetTotalForMonth(budgets, categories, mKey, fallback) {
@@ -193,8 +193,44 @@ function prevMonthKey(mKey) {
 function fixedForecastItemsForMonth(fixedExpenses, mKey) {
   const direct = fixedExpenses.filter(f => f.active !== false && !f.onCredit && isFixedApplicable(f, mKey));
   const prevKey = prevMonthKey(mKey);
-  const creditFromPrev = fixedExpenses.filter(f => f.active !== false && f.onCredit && isFixedApplicable(f, prevKey));
+  // רק הגדרה גלובלית: הוצאות עם cardId מחושבות בנפרד לפי הגדרות הכרטיס (cardForecastForMonth)
+  const creditFromPrev = fixedExpenses.filter(f => f.active !== false && f.onCredit && !f.cardId && isFixedApplicable(f, prevKey));
   return { direct, creditFromPrev };
+}
+
+/* ---------- כרטיסי אשראי (תוספתי: settings.cards, fixedExpenses[].cardId אופציונלי) ---------- */
+function shiftMonthKey(mKey, delta) { const [y, m] = mKey.split("-").map(Number); return monthKey(new Date(y, m - 1 + delta, 1)); }
+// כרטיס "שלם" רק אם הוגדרו במפורש גם יום חיוב (1-31) וגם lag (0-6 חודשים אחרי חודש ההוצאה). אין ברירות מחדל.
+function isCardComplete(c) {
+  return !!c && Number.isInteger(c.billingDay) && c.billingDay >= 1 && c.billingDay <= 31 && Number.isInteger(c.lag) && c.lag >= 0 && c.lag <= 6;
+}
+function cardMissingSettings(c) {
+  if (!c) return "הכרטיס לא קיים";
+  const miss = [];
+  if (!(Number.isInteger(c.billingDay) && c.billingDay >= 1 && c.billingDay <= 31)) miss.push("יום חיוב");
+  if (!(Number.isInteger(c.lag) && c.lag >= 0 && c.lag <= 6)) miss.push("חודש החיוב");
+  return miss.length ? "חסר: " + miss.join(" ו") : "";
+}
+const sumAmt = (items) => items.reduce((t, f) => t + (Number(f.amount) || 0), 0);
+// הוצאות קבועות באשראי המשויכות לכרטיס, לחודש תחזית mKey.
+// scheduled: כרטיס מוגדר במלואו - ההוצאות של חודש (mKey - lag) יורדות ביום החיוב של הכרטיס ב-mKey.
+// unscheduled: חסרה הגדרה (או כרטיס לא קיים) - הסכום הידוע של הוצאות חודש mKey, ללא תזמון וללא ניחוש.
+function cardForecastForMonth(fixedExpenses, cards, mKey) {
+  const list = cards || [];
+  const cardItems = fixedExpenses.filter(f => f.active !== false && f.onCredit && f.cardId);
+  const ids = []; cardItems.forEach(f => { if (!ids.includes(f.cardId)) ids.push(f.cardId); });
+  const scheduled = [], unscheduled = [];
+  ids.forEach(id => {
+    const card = list.find(c => c.id === id);
+    if (isCardComplete(card)) {
+      const items = cardItems.filter(f => f.cardId === id && isFixedApplicable(f, shiftMonthKey(mKey, -card.lag)));
+      if (items.length) scheduled.push({ card, items, total: sumAmt(items), day: card.billingDay });
+    } else {
+      const items = cardItems.filter(f => f.cardId === id && isFixedApplicable(f, mKey));
+      if (items.length) unscheduled.push({ cardId: id, name: card ? (card.name || "כרטיס ללא שם") : "כרטיס לא מוכר", why: cardMissingSettings(card), items, total: sumAmt(items) });
+    }
+  });
+  return { scheduled, unscheduled };
 }
 
 async function jsonbinCreate() {
@@ -452,8 +488,8 @@ function BudgetApp() {
   };
   const deleteExpense = async (id) => { await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); showToast("ההוצאה נמחקה"); };
 
-  const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth, effectiveFrom, effectiveTo) => {
-    const period = {}; if (effectiveFrom) period.effectiveFrom = effectiveFrom; if (effectiveTo) period.effectiveTo = effectiveTo;
+  const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth, effectiveFrom, effectiveTo, onCredit, cardId) => {
+    const period = {}; if (onCredit) { period.onCredit = true; if (cardId) period.cardId = cardId; } if (effectiveFrom) period.effectiveFrom = effectiveFrom; if (effectiveTo) period.effectiveTo = effectiveTo;
     await persist({ ...data, fixedExpenses: [...data.fixedExpenses, { id: uid(), name, amount, dueDay, frequencyMonths: frequencyMonths || 1, anchorMonth: anchorMonth || monthKey(new Date()), active: true, ...period }] });
   };
   const updateFixedExpense = async (id, patch) => {
@@ -474,6 +510,9 @@ function BudgetApp() {
 
   const addIncome = async (monthK, source, amount, day) => {
     await persist({ ...data, incomeEntries: [...data.incomeEntries, { id: uid(), monthKey: monthK, source, amount, day: day || 1 }] });
+  };
+  const saveCards = async (cards) => {
+    await persist({ ...data, settings: { ...data.settings, cards } });
   };
   const setCreditBillingDay = async (day) => {
     await persist({ ...data, settings: { ...data.settings, creditBillingDay: day } });
@@ -565,7 +604,7 @@ function BudgetApp() {
         )}
         {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
         {tab === "fixed" && (
-          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} onSplit={splitFixedExpense}
+          <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} onSplit={splitFixedExpense} cards={data.settings.cards || []}
             plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onRemovePlanned={removePlanned} monthDate={monthDate} />
         )}
         {tab === "forecast" && (
@@ -574,6 +613,7 @@ function BudgetApp() {
             budgets={data.budgets} categories={activeCategories} creditLag={data.settings.creditLag} onToggleCreditLag={toggleCreditLag}
             openingBalance={data.settings.openingBalance} onSetOpeningBalance={setOpeningBalance}
             creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay}
+            cards={data.settings.cards || []} onSaveCards={saveCards}
             variableOverrides={data.settings.variableOverrides} onSetVariableOverride={setVariableOverride} />
         )}
         {tab === "budget" && (
@@ -914,7 +954,7 @@ function FixedPeriodPanel({ f, mKey, siblings, onUpdate, onSplit, onClose }) {
 }
 
 /* ================= FIXED EXPENSES TAB ================= */
-function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
+function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, cards, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
@@ -926,6 +966,8 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
   const [toM, setToM] = useState("");
   const [addErr, setAddErr] = useState("");
   const [showEnded, setShowEnded] = useState(false);
+  const [addCredit, setAddCredit] = useState(false);
+  const [addCard, setAddCard] = useState("");
   const byDay = (a, b) => (a.dueDay || 1) - (b.dueDay || 1) || String(a.effectiveFrom || "").localeCompare(String(b.effectiveFrom || ""));
   const allActive = fixedExpenses.filter(f => f.active !== false);
   // הוצאות שהסתיימו לפני החודש הנבחר מוצגות בנפרד (ההיסטוריה נשמרת); כל השאר בדיוק כמו קודם
@@ -933,7 +975,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
   const active = allActive.filter(f => !ended.includes(f)).sort(byDay);
   const total = fixedTotalForMonth(fixedExpenses, mKey);
 
-  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setFromM(""); setToM(""); setAddErr(""); setAdding(false); };
+  const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setFromM(""); setToM(""); setAddErr(""); setAddCredit(false); setAddCard(""); setAdding(false); };
 
   const [addingPlanned, setAddingPlanned] = useState(false);
   const [pName, setPName] = useState("");
@@ -956,8 +998,22 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } }}
                   onBlur={(e) => onUpdate(f.id, { name: e.target.value || f.name })} />
                 <div className="fx-sub">
-                  חיוב בכל {f.dueDay} לחודש · {fixedFreqLabel(f.frequencyMonths)} · {f.onCredit ? "באשראי (חודש הבא)" : "חיוב ישיר"}
+                  חיוב בכל {f.dueDay} לחודש · {fixedFreqLabel(f.frequencyMonths)} · {!f.onCredit ? "חיוב ישיר" : !f.cardId ? "באשראי (חודש הבא)" : `באשראי · ${(cards.find(c => c.id === f.cardId) || {}).name || "כרטיס לא קיים"}`}
                 </div>
+                {f.onCredit && (
+                  <div style={{ marginTop: 4 }}>
+                    <select aria-label="כרטיס אשראי" value={f.cardId || ""} onChange={(e) => onUpdate(f.id, { cardId: e.target.value || null })}
+                      style={{ width: "100%", maxWidth: 260, height: 38, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 14, fontFamily: "inherit", padding: "0 6px" }}>
+                      <option value="">הגדרה גלובלית (ללא כרטיס)</option>
+                      {cards.map(c => <option key={c.id} value={c.id}>{c.name || "כרטיס ללא שם"}</option>)}
+                      {f.cardId && !cards.some(c => c.id === f.cardId) && <option value={f.cardId}>כרטיס לא קיים</option>}
+                    </select>
+                    {f.cardId && (() => { const c = cards.find(x => x.id === f.cardId); return !isCardComplete(c) ? (
+                      <div role="alert" style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 4 }}>
+                        ⚠️ {c ? `חסרות הגדרות חיוב לכרטיס (${cardMissingSettings(c)})` : "הכרטיס לא קיים"} — הסכום לא ישובץ בתחזית עד שיוגדרו
+                      </div>) : null; })()}
+                  </div>
+                )}
                 {(f.effectiveFrom || f.effectiveTo) && (
                   <div className="fx-sub" style={{ color: COLORS.sage, fontWeight: 600 }}>
                     תוקף: {f.effectiveFrom ? `מ־${monthLabelOf(f.effectiveFrom)}` : "ללא התחלה"}{f.effectiveTo ? ` עד ${monthLabelOf(f.effectiveTo)}` : " ללא הגבלה"}
@@ -1032,6 +1088,15 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
             <MonthPicker label="החל מחודש (לא חובה)" value={fromM} onChange={setFromM} allowEmpty />
             <MonthPicker label="עד חודש (לא חובה)" value={toM} onChange={setToM} allowEmpty />
           </div>
+          <div style={{ marginBottom: 10 }}>
+            <button onClick={() => setAddCredit(v => !v)} aria-pressed={addCredit} style={{ minHeight: 40, padding: "0 12px", borderRadius: 10, border: `1.5px solid ${addCredit ? COLORS.sage : COLORS.mist}`, background: addCredit ? COLORS.sageLight : "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>💳 חיוב באשראי {addCredit ? "✓" : ""}</button>
+            {addCredit && (
+              <select aria-label="כרטיס אשראי" value={addCard} onChange={e => setAddCard(e.target.value)} style={{ ...selectStyle, marginTop: 8, width: "100%", height: 40, fontSize: 16 }}>
+                <option value="">הגדרה גלובלית (ללא כרטיס)</option>
+                {cards.map(c => <option key={c.id} value={c.id}>{c.name || "כרטיס ללא שם"}</option>)}
+              </select>
+            )}
+          </div>
           {addErr && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{addErr}</div>}
           <label style={labelStyle}>תדירות</label>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -1044,7 +1109,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={reset} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
-            <button disabled={!name.trim() || !Number(amount)} onClick={() => { const e = validateFixedPeriod(fromM, toM, []); if (e) return setAddErr(e); onAdd(name.trim(), Number(amount), Number(dueDay) || 1, Number(freq), mKey, fromM || null, toM || null); reset(); }}
+            <button disabled={!name.trim() || !Number(amount)} onClick={() => { const e = validateFixedPeriod(fromM, toM, []); if (e) return setAddErr(e); onAdd(name.trim(), Number(amount), Number(dueDay) || 1, Number(freq), mKey, fromM || null, toM || null, addCredit, addCard || null); reset(); }}
               style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
           </div>
         </div>
@@ -1096,12 +1161,14 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, p
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
   const [dayDraft, setDayDraft] = useState("1");
   const [expandedMonth, setExpandedMonth] = useState(null);
+  const [cardsOpen, setCardsOpen] = useState(false);
+  const [newCardName, setNewCardName] = useState("");
 
   const months = useMemo(() => {
     const arr = [];
@@ -1113,6 +1180,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   }, [monthDate]);
 
   let running = Number(openingBalance) || 0;
+  let runPartial = false;
   const rows = months.map((m) => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
@@ -1126,7 +1194,15 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
     const autoCreditLump = creditFixedTotal + autoVariableSpend;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
-    const creditLump = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoCreditLump;
+    const globalCredit = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoCreditLump;
+    // כרטיסים: עם override הידני הסכום מחליף את כל האשראי ולכן סכומי הכרטיסים לא מתווספים שוב
+    const cardInfo = cardForecastForMonth(fixedExpenses, cards, m.key);
+    const cardLines = hasOverride ? [] : cardInfo.scheduled;
+    const cardTotal = cardLines.reduce((t, c) => t + c.total, 0);
+    const unscheduled = hasOverride ? [] : cardInfo.unscheduled;
+    const partial = unscheduled.length > 0;
+    runPartial = runPartial || partial;
+    const creditLump = globalCredit + cardTotal;
     const balance = income - directFixedTotal - creditLump - plannedTotal;
 
     const openingForMonth = running;
@@ -1137,10 +1213,11 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}`, amount: Number(e.amount) || 0 }));
     directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
-    if (creditLump > 0) {
+    if (globalCredit > 0) {
       const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
-      events.push({ day: Number(creditBillingDay) || 1, label, amount: -creditLump });
+      events.push({ day: Number(creditBillingDay) || 1, label, amount: -globalCredit });
     }
+    cardLines.forEach(cl => events.push({ day: cl.day, label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     let bal = openingForMonth;
@@ -1152,7 +1229,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
       return { ...ev, after: bal };
     });
 
-    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay };
+    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay, globalCredit, cardLines, cardTotal, unscheduled, partial, runPartial };
   });
 
   const addIncomeHere = (mKey) => {
@@ -1187,6 +1264,63 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           style={{ width: 70, padding: "7px 10px", borderRadius: 9, border: `1.5px solid ${COLORS.mist}`, fontSize: 13.5, textAlign: "center", fontWeight: 700 }} />
       </div>
 
+      {rows.some(r => r.partial) && (
+        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12, lineHeight: 1.5 }}>
+          ⚠️ היתרה החזויה חלקית: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בכל חודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.
+        </div>
+      )}
+      <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
+        <button onClick={() => setCardsOpen(o => !o)} aria-expanded={cardsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+          <span>💳 ניהול כרטיסי אשראי ({cards.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{cardsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
+        </button>
+        {cardsOpen && (
+          <div style={{ paddingBottom: 12 }}>
+            <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>
+              כרטיס נכנס לתחזית רק אחרי שהוגדרו לו יום חיוב וחודש חיוב. אין ערכי ברירת מחדל, והמועד בתחזית הוא הערכה לפי ההגדרות שהזנת ולא מועד בנקאי מאומת. הוצאות ללא כרטיס ממשיכות לפי ההגדרה הגלובלית.
+            </div>
+            {cards.map(c => {
+              const used = fixedExpenses.filter(f => f.cardId === c.id).length;
+              const miss = cardMissingSettings(c);
+              const upd = (patch) => onSaveCards(cards.map(x => x.id === c.id ? { ...x, ...patch } : x));
+              const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 15, fontFamily: "inherit", minWidth: 0, padding: "0 6px" };
+              return (
+                <div key={c.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input aria-label="שם הכרטיס" defaultValue={c.name} placeholder="שם הכרטיס" onBlur={e => { const v = e.target.value.trim(); if (v && v !== c.name) upd({ name: v }); }}
+                      style={{ ...sel, flex: 1, fontWeight: 700, fontSize: 16 }} />
+                    {used === 0
+                      ? <button aria-label="מחיקת כרטיס" onClick={() => onSaveCards(cards.filter(x => x.id !== c.id))} style={{ width: 44, height: 40, borderRadius: 10, border: "none", background: COLORS.paper, color: COLORS.coral, cursor: "pointer", fontSize: 16 }}>🗑</button>
+                      : <span style={{ fontSize: 11, color: COLORS.sub, whiteSpace: "nowrap" }}>בשימוש ב־{used}</span>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                    <div><label style={labelStyle}>יום חיוב</label>
+                      <select aria-label="יום חיוב" value={Number.isInteger(c.billingDay) ? String(c.billingDay) : ""} onChange={e => upd({ billingDay: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                        <option value="">לא הוגדר</option>
+                        {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+                      </select></div>
+                    <div><label style={labelStyle}>חודש החיוב</label>
+                      <select aria-label="חודש החיוב" value={Number.isInteger(c.lag) ? String(c.lag) : ""} onChange={e => upd({ lag: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                        <option value="">לא הוגדר</option>
+                        <option value="0">באותו חודש ההוצאה</option>
+                        <option value="1">חודש אחרי</option>
+                        <option value="2">חודשיים אחרי</option>
+                        <option value="3">3 חודשים אחרי</option>
+                      </select></div>
+                  </div>
+                  {miss && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ {miss} — הכרטיס לא ישובץ בתזרים</div>}
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", gap: 8, borderTop: cards.length ? `1px solid ${COLORS.mist}` : "none", paddingTop: 10 }}>
+              <input aria-label="שם כרטיס חדש" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם כרטיס חדש (למשל: ויזה 5808)"
+                style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 16, padding: "0 10px", fontFamily: "inherit" }} />
+              <button disabled={!newCardName.trim()} onClick={() => { onSaveCards([...cards, { id: uid(), name: newCardName.trim(), billingDay: null, lag: null }]); setNewCardName(""); }}
+                style={{ minHeight: 40, padding: "0 14px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: newCardName.trim() ? 1 : 0.5 }}>הוספה</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {rows.map((r, idx) => (
         <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
           <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, cursor: "pointer" }}>
@@ -1200,19 +1334,32 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
             <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
+              <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
                 style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
               {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
             </span>
           </div>
+          {r.cardLines.length > 0 && (
+            <div style={{ fontSize: 11.5, color: COLORS.sub, padding: "0 0 4px", lineHeight: 1.6 }}>
+              <div>מתוך סך האשראי: גלובלי {fmt(r.globalCredit)}</div>
+              {r.cardLines.map(cl => <div key={cl.card.id}>💳 {cl.card.name || "כרטיס"}: {fmt(cl.total)} · יום {cl.day} (הערכה)</div>)}
+            </div>
+          )}
+          {r.hasOverride && cards.length > 0 && <div style={{ fontSize: 11.5, color: COLORS.sub, paddingBottom: 4 }}>הסכום הידני מחליף את כל סכומי האשראי בחודש זה, כולל כרטיסים</div>}
+          {r.unscheduled.map(u => (
+            <div key={u.cardId} role="alert" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
+              ⏳ טרם שובץ לתזרים: {u.name} — {fmt(u.total)} <span style={{ opacity: 0.85 }}>({u.why || "חסרות הגדרות חיוב"})</span>
+            </div>
+          ))}
           {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
           <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
-            <Row label="יתרה מצטברת עד חודש זה" value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
+            <Row label={r.runPartial ? "יתרה מצטברת חלקית" : "יתרה מצטברת עד חודש זה"} value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
+            {r.runPartial && <div style={{ fontSize: 11.5, color: "#8a6400", marginTop: 2 }}>⚠️ היתרה חלקית: אינה כוללת סכומים שטרם שובצו לתזרים (בחודש זה או בחודשים קודמים)</div>}
           </div>
 
           {r.minBal < r.openingForMonth && r.minBal < 0 && (
             <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: COLORS.coralLight, color: COLORS.coral, fontSize: 12, fontWeight: 600 }}>
-              ⚠️ בתאריך {r.minDay} לחודש, היתרה צפויה לרדת עד {fmt(r.minBal)} — לפני שהכל מסתדר בסוף החודש
+              ⚠️ בתאריך {r.minDay} לחודש, היתרה צפויה לרדת עד {fmt(r.minBal)}{r.runPartial ? " (חלקי)" : ""} — לפני שהכל מסתדר בסוף החודש
             </div>
           )}
 
