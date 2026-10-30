@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "27";
+const APP_VERSION = "28";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -733,9 +733,13 @@ function BudgetApp() {
           <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct} budgetSourceLabel={budgetSourceLabel}
             daysLeft={daysLeft} isCurrentMonth={isCurrentMonth} projected={projected} paceHigh={paceHigh}
             perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={activeCategories} dim={dim}
-            onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} />
+            onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} onShowAllExpenses={() => setTab("expenses")} />
         )}
         {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
+        {tab === "more" && <MoreMenu onPick={setTab} />}
+        {(tab === "fixed" || tab === "budget" || tab === "advice") && (
+          <button onClick={() => setTab("more")} style={{ border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer", padding: "2px 0 10px", display: "block" }}>‹ חזרה ל"עוד"</button>
+        )}
         {tab === "fixed" && (
           <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} onSplit={splitFixedExpense} cards={data.settings.cards || []}
             plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onRemovePlanned={removePlanned} monthDate={monthDate} />
@@ -763,19 +767,14 @@ function BudgetApp() {
           fixedExpenses={activeFixed.filter(f => isFixedInPeriod(f, mKey))} advices={data.settings.advices || []} legacyAdvice={data.settings.lastAdvice} onSaved={saveAdvice} />}
       </div>
 
-      <button onClick={() => setShowAddExpense(true)} style={{
-        position: "fixed", bottom: 84, left: "50%", transform: "translateX(-50%)", background: COLORS.sage, color: "#fff",
-        border: "none", borderRadius: 999, padding: "13px 26px", display: "flex", alignItems: "center", gap: 8,
-        fontWeight: 700, fontSize: 15, boxShadow: "0 8px 24px rgba(47,111,94,0.4)", zIndex: 30, cursor: "pointer"
-      }}>＋ הוצאה חדשה</button>
-
-      <div style={{ position: "fixed", bottom: 0, right: 0, left: 0, background: COLORS.card, borderTop: `1px solid ${COLORS.mist}`, display: "flex", zIndex: 25, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
-        <NavBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")} icon="▦" label="דשבורד" />
-        <NavBtn active={tab === "expenses"} onClick={() => setTab("expenses")} icon="🧾" label="הוצאות" />
-        <NavBtn active={tab === "fixed"} onClick={() => setTab("fixed")} icon="📌" label="קבועות" />
+      <div style={{ position: "fixed", bottom: 0, right: 0, left: 0, background: COLORS.card, borderTop: `1px solid ${COLORS.mist}`, display: "flex", alignItems: "center", zIndex: 25, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+        <NavBtn active={tab === "dashboard"} onClick={() => setTab("dashboard")} icon="▦" label="ראשי" />
         <NavBtn active={tab === "forecast"} onClick={() => setTab("forecast")} icon="📈" label="תחזית" />
-        <NavBtn active={tab === "budget"} onClick={() => setTab("budget")} icon="💰" label="תקציב" />
-        <NavBtn active={tab === "advice"} onClick={() => setTab("advice")} icon="💬" label="ייעוץ" />
+        <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+          <button onClick={() => setShowAddExpense(true)} aria-label="הוצאה חדשה" style={{ width: 54, height: 54, marginTop: -22, borderRadius: 999, border: "none", background: COLORS.sage, color: "#fff", fontSize: 30, lineHeight: 1, cursor: "pointer", boxShadow: "0 4px 12px rgba(47,111,94,0.4)" }}>＋</button>
+        </div>
+        <NavBtn active={tab === "expenses"} onClick={() => setTab("expenses")} icon="🧾" label="הוצאות" />
+        <NavBtn active={["more", "fixed", "budget", "advice"].includes(tab)} onClick={() => setTab("more")} icon="☰" label="עוד" />
       </div>
 
       {(showAddExpense || editExpense) && (
@@ -787,6 +786,27 @@ function BudgetApp() {
   );
 }
 
+function MoreMenu({ onPick }) {
+  const items = [
+    { id: "fixed", icon: "📌", label: "הוצאות קבועות", sub: "סכומים, כרטיסים, תוקף ושינוי סכום" },
+    { id: "budget", icon: "💰", label: "תקציב", sub: "תקציב לכל קטגוריה וחלוקת מזומן/אשראי" },
+    { id: "advice", icon: "💬", label: "ייעוץ", sub: "חוות דעת וניתוחים קודמים" },
+  ];
+  return (
+    <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden" }}>
+      {items.map((it, i) => (
+        <button key={it.id} onClick={() => onPick(it.id)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", border: "none", borderTop: i ? `1px solid ${COLORS.mist}` : "none", background: "none", cursor: "pointer", textAlign: "start", color: COLORS.ink }}>
+          <span style={{ fontSize: 22 }}>{it.icon}</span>
+          <span style={{ flex: 1 }}>
+            <span style={{ display: "block", fontWeight: 700, fontSize: 15 }}>{it.label}</span>
+            <span style={{ display: "block", fontSize: 12, color: COLORS.sub, marginTop: 2 }}>{it.sub}</span>
+          </span>
+          <span style={{ color: COLORS.sub }}>‹</span>
+        </button>
+      ))}
+    </div>
+  );
+}
 const navBtnStyle = { width: 34, height: 34, borderRadius: 999, border: "none", background: COLORS.card, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: COLORS.ink, fontSize: 18 };
 function NavBtn({ active, onClick, icon, label }) {
   return (
@@ -835,9 +855,36 @@ function AlertsSummary({ alerts }) {
   );
 }
 
-function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, budgetSourceLabel }) {
+function AttentionList({ alerts }) {
+  const [more, setMore] = useState(false);
+  if (!alerts.length) return null;
+  const urgent = alerts.filter(a => a.kind === "over" || a.kind === "pace");
+  const rest = alerts.filter(a => !(a.kind === "over" || a.kind === "pace"));
+  const rowFor = (a) => (
+    <div key={a.kind + a.key} style={{ padding: "9px 12px", borderRadius: 10, background: ALERT_STYLE[a.kind].bg, color: ALERT_STYLE[a.kind].fg, fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" }}>{a.text}</div>
+  );
+  const counts = {}; rest.forEach(a => { counts[a.kind] = (counts[a.kind] || 0) + 1; });
+  const restLabel = ["near", "full"].filter(k => counts[k]).map(k => ALERT_STYLE[k].label(counts[k])).join(" · ");
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14, margin: "2px 2px 8px", color: COLORS.sub }}>דורש תשומת לב</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {urgent.length === 0 && <div style={{ padding: "9px 12px", borderRadius: 10, background: COLORS.sageLight, color: COLORS.sage, fontSize: 13, fontWeight: 600 }}>אין חריגות</div>}
+        {urgent.map(rowFor)}
+        {rest.length > 0 && (
+          <button onClick={() => setMore(m => !m)} aria-expanded={more} style={{ border: "none", background: COLORS.card, borderRadius: 10, padding: "10px 12px", display: "flex", justifyContent: "space-between", cursor: "pointer", fontSize: 12.5, color: COLORS.sub, minHeight: 44 }}>
+            <span>{restLabel}</span><span>{more ? "הסתר ▴" : "הצג ▾"}</span>
+          </button>
+        )}
+        {more && rest.map(rowFor)}
+      </div>
+    </div>
+  );
+}
+function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, onShowAllExpenses, budgetSourceLabel }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const gaugeColor = statusColor(overallPct);
-  const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
+  const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 3);
   const barData = perCategory.filter(c => c.budget > 0 || c.spent > 0).map(c => ({ name: c.name, budget: c.budget, spent: c.spent }));
   const pieData = perCategory.filter(c => c.spent > 0).map(c => ({ name: c.name, value: c.spent }));
 
@@ -881,8 +928,12 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
         )}
       </div>
 
-      <AlertsSummary alerts={alerts} />
+      <AttentionList alerts={alerts} />
 
+      <button onClick={() => setDetailOpen(o => !o)} aria-expanded={detailOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: COLORS.card, border: "none", borderRadius: 14, padding: "13px 14px", marginBottom: 14, cursor: "pointer", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14.5, color: COLORS.ink, minHeight: 44 }}>
+        <span>פירוט לפי קטגוריה וגרפים</span><span style={{ fontSize: 12, color: COLORS.sub }}>{detailOpen ? "הסתר ▴" : "הצג ▾"}</span>
+      </button>
+      {detailOpen && <div>
       <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 8px" }}>קטגוריות</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
         {perCategory.map(c => (
@@ -908,12 +959,14 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
       {barData.length > 0 && <ChartCard title="תקציב מול ביצוע"><BudgetVsActualChart data={barData} /></ChartCard>}
       {pieData.length > 0 && <ChartCard title="התפלגות הוצאות"><DonutChart data={pieData} /></ChartCard>}
       {cumulative.length > 1 && <ChartCard title="הוצאות מצטברות במהלך החודש"><CumulativeLineChart points={cumulative} budget={totalBudget} /></ChartCard>}
+      </div>}
 
       <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "6px 2px 8px" }}>הוצאות אחרונות</div>
       <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 20 }}>
         {recent.length === 0 && <div style={{ padding: 16, fontSize: 13, color: COLORS.sub, textAlign: "center" }}>עדיין אין הוצאות החודש</div>}
         {recent.map((e, i) => <ExpenseRow key={e.id} exp={e} categories={categories} last={i === recent.length - 1} onEdit={onEditExpense} onDelete={onDeleteExpense} />)}
       </div>
+      <button onClick={onShowAllExpenses} style={{ width: "100%", border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 14, cursor: "pointer", padding: "0 0 20px", minHeight: 44 }}>כל ההוצאות ‹</button>
     </div>
   );
 }
