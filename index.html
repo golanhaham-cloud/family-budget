@@ -1502,6 +1502,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const [ovr, setOvr] = useState(null); // { key, rid, amount, day, err }
   const [newCardName, setNewCardName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [warnOpen, setWarnOpen] = useState(false);
 
   // עוגן יתרה עם תאריך: היתרה מתייחסת לתחילת היום שנבחר (לפני התנועות של אותו יום),
   // והחישוב סופר רק תנועות מהתאריך הזה והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
@@ -1632,7 +1633,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     <div>
       <div style={{ margin: "6px 2px 4px", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
       <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
-        טבלה מרוכזת של 6 החודשים: השינוי החודשי והיתרה המשוערת בסוף כל חודש. לחיצה על חודש פותחת את הפירוט היומי המלא, כולל סדר הכניסות וההוצאות והנקודה הנמוכה בחודש
+        לחיצה על חודש בטבלה פותחת את הפירוט היומי המלא, כולל הנקודה הנמוכה בחודש
       </div>
 
       {anchorInfo && anchorInfo.unsupported && (
@@ -1651,113 +1652,35 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         </div>
       )}
 
-      {(rows.some(r => r.partial) || rows.some(r => r.minBal < r.openingForMonth && r.minBal < 0)) && (
-        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.6, display: "flex", flexDirection: "column", gap: 6 }}>
-          {rows.some(r => r.partial) && (
-            <div>⚠️ חלק מהיתרות חלקיות: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בפירוט החודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.</div>
-          )}
-          {rows.filter(r => r.minBal < r.openingForMonth && r.minBal < 0).map(r => (
-            <div key={r.key} style={{ color: COLORS.coral }}>⚠️ {r.label}: היתרה צפויה לרדת עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""} — לפני שהיא מתאזנת בסוף החודש</div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
-        <button onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
-          <span>⚙️ הגדרות תחזית</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{settingsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
-        </button>
-        {settingsOpen && (
-          <div style={{ paddingBottom: 12 }}>
-            <div style={{ marginBottom: 10 }}>
-              <label style={labelStyle}>מועד חיוב האשראי</label>
-              <button onClick={onToggleCreditLag} style={{
-                display: "flex", alignItems: "center", gap: 6, border: "none", background: creditLag ? COLORS.sageLight : COLORS.card,
-                color: creditLag ? COLORS.sage : COLORS.sub, padding: "6px 10px", borderRadius: 9, fontSize: 11.5, fontWeight: 600, cursor: "pointer"
-              }}>
-                💳 חיוב אשראי בחודש הבא {creditLag ? "✓" : ""}
-              </button>
-            </div>
-            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
-              <label style={labelStyle}>יתרת פתיחה בבנק</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <div style={{ flex: "0 1 140px" }}>
-                  <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
-                    style={{ ...inputStyle, textAlign: "center", fontWeight: 700 }} />
-                </div>
-                <div style={{ flex: "0 1 175px" }}>
-                  <label style={labelStyle}>נכון לתאריך</label>
-                  <input type="date" value={openingBalanceDate || ""} onChange={(e) => onSetOpeningBalanceDate(e.target.value)}
-                    style={{ ...inputStyle }} />
-                </div>
+      {(rows.some(r => r.partial) || rows.some(r => r.minBal < r.openingForMonth && r.minBal < 0)) && (() => {
+        const dipRows = rows.filter(r => r.minBal < r.openingForMonth && r.minBal < 0);
+        const anyPartial = rows.some(r => r.partial);
+        const worst = dipRows.reduce((a, b) => (b.minBal < a.minBal ? b : a), dipRows[0] || null);
+        const dipSummary = dipRows.length === 1
+          ? `${dipRows[0].label}: ירידה צפויה עד ${fmt(dipRows[0].minBal)} ביום ${dipRows[0].minDay}`
+          : dipRows.length > 1
+            ? `${dipRows.length} חודשים צפויים לרדת למינוס · הנמוכה ביותר: ${worst.label}, עד ${fmt(worst.minBal)} ביום ${worst.minDay}`
+            : "";
+        const partialSummary = anyPartial ? "חלק מהיתרות חלקיות (יש סכומים שטרם שובצו לתזרים)" : "";
+        return (
+          <div style={{ background: COLORS.amberLight, borderRadius: 12, padding: "4px 12px", marginBottom: 10 }}>
+            <button onClick={() => setWarnOpen(o => !o)} aria-expanded={warnOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, border: "none", background: "none", cursor: "pointer", minHeight: 40, padding: 0, fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, color: dipRows.length ? COLORS.coral : "#8a6400", textAlign: "right", lineHeight: 1.5 }}>
+              <span>⚠️ {[dipSummary, partialSummary].filter(Boolean).join(" · ")}</span>
+              <span style={{ flexShrink: 0, fontSize: 11, color: "#8a6400", fontWeight: 600 }}>{warnOpen ? "סגירה ▴" : "פירוט ▾"}</span>
+            </button>
+            {warnOpen && (
+              <div role="alert" style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 10, fontSize: 12.5, fontWeight: 600, color: "#8a6400", lineHeight: 1.6 }}>
+                {anyPartial && (
+                  <div>⚠️ חלק מהיתרות חלקיות: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בפירוט החודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.</div>
+                )}
+                {dipRows.map(r => (
+                  <div key={r.key} style={{ color: COLORS.coral }}>⚠️ {r.label}: היתרה צפויה לרדת עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""} — לפני שהיא מתאזנת בסוף החודש</div>
+                ))}
               </div>
-              <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>
-                {openingBalanceDate
-                  ? "היתרה מתייחסת לתחילת היום שנבחר, לפני התנועות של אותו יום. התחזית סופרת רק תנועות מהתאריך והלאה (כולל אותו יום), ותנועות קודמות לא נספרות פעמיים. אם היתרה בבנק כבר כוללת את תנועות היום, בחרו את התאריך של מחר."
-                  : "ללא תאריך, היתרה נחשבת יתרת פתיחה של חודש התחזית הראשון (החודש הבא)."}
-              </div>
-            </div>
-            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
-              <label style={labelStyle}>יום חיוב אשראי בחודש</label>
-              <input type="number" min="1" max="31" defaultValue={creditBillingDay} onBlur={(e) => onSetCreditBillingDay(Number(e.target.value) || 1)}
-                style={{ ...inputStyle, maxWidth: 100, textAlign: "center", fontWeight: 700 }} />
-            </div>
-
-            <RecurringIncomesPanel recurringIncomes={recurringIncomes} incomeEntries={incomeEntries} onSave={onSaveRecurring} onLink={onLinkEntries} />
-
-            <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 12, paddingTop: 6 }}>
-              <button onClick={() => setCardsOpen(o => !o)} aria-expanded={cardsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
-                <span>💳 ניהול כרטיסי אשראי ({cards.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{cardsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
-              </button>
-              {cardsOpen && (
-                <div style={{ paddingBottom: 12 }}>
-                  <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>
-                    כרטיס נכנס לתחזית רק אחרי שהוגדרו לו יום חיוב וחודש חיוב. אין ערכי ברירת מחדל, והמועד בתחזית הוא הערכה לפי ההגדרות שהזנת ולא מועד בנקאי מאומת. הוצאות ללא כרטיס ממשיכות לפי ההגדרה הגלובלית.
-                  </div>
-                  {cards.map(c => {
-                    const used = fixedExpenses.filter(f => f.cardId === c.id).length;
-                    const miss = cardMissingSettings(c);
-                    const upd = (patch) => onSaveCards(cards.map(x => x.id === c.id ? { ...x, ...patch } : x));
-                    const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 15, fontFamily: "inherit", minWidth: 0, padding: "0 6px" };
-                    return (
-                      <div key={c.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <input aria-label="שם הכרטיס" defaultValue={c.name} placeholder="שם הכרטיס" onBlur={e => { const v = e.target.value.trim(); if (v && v !== c.name) upd({ name: v }); }}
-                            style={{ ...sel, flex: 1, fontWeight: 700, fontSize: 16 }} />
-                          {used === 0
-                            ? <button aria-label="מחיקת כרטיס" onClick={() => onSaveCards(cards.filter(x => x.id !== c.id))} style={{ width: 44, height: 40, borderRadius: 10, border: "none", background: COLORS.paper, color: COLORS.coral, cursor: "pointer", fontSize: 16 }}>🗑</button>
-                            : <span style={{ fontSize: 11, color: COLORS.sub, whiteSpace: "nowrap" }}>בשימוש ב־{used}</span>}
-                        </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                          <div><label style={labelStyle}>יום חיוב</label>
-                            <select aria-label="יום חיוב" value={Number.isInteger(c.billingDay) ? String(c.billingDay) : ""} onChange={e => upd({ billingDay: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
-                              <option value="">לא הוגדר</option>
-                              {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
-                            </select></div>
-                          <div><label style={labelStyle}>חודש החיוב</label>
-                            <select aria-label="חודש החיוב" value={Number.isInteger(c.lag) ? String(c.lag) : ""} onChange={e => upd({ lag: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
-                              <option value="">לא הוגדר</option>
-                              <option value="0">באותו חודש ההוצאה</option>
-                              <option value="1">חודש אחרי</option>
-                              <option value="2">חודשיים אחרי</option>
-                              <option value="3">3 חודשים אחרי</option>
-                            </select></div>
-                        </div>
-                        {miss && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ {miss} — הכרטיס לא ישובץ בתזרים</div>}
-                      </div>
-                    );
-                  })}
-                  <div style={{ display: "flex", gap: 8, borderTop: cards.length ? `1px solid ${COLORS.mist}` : "none", paddingTop: 10 }}>
-                    <input aria-label="שם כרטיס חדש" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם כרטיס חדש (למשל: ויזה 5808)"
-                      style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 16, padding: "0 10px", fontFamily: "inherit" }} />
-                    <button disabled={!newCardName.trim()} onClick={() => { onSaveCards([...cards, { id: uid(), name: newCardName.trim(), billingDay: null, lag: null }]); setNewCardName(""); }}
-                      style={{ minHeight: 40, padding: "0 14px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: newCardName.trim() ? 1 : 0.5 }}>הוספה</button>
-                  </div>
-                </div>
-              )}
-            </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       <div style={{ fontSize: 11, color: COLORS.sub, margin: "0 2px 8px", lineHeight: 1.5 }}>
         {openingBalanceDate && anchorInfo
@@ -1936,6 +1859,103 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           )}
         </div>
       ))}
+      </div>
+
+      <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
+        <button onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+          <span>⚙️ הגדרות תחזית</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{settingsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
+        </button>
+        {settingsOpen && (
+          <div style={{ paddingBottom: 12 }}>
+            <div style={{ marginBottom: 10 }}>
+              <label style={labelStyle}>מועד חיוב האשראי</label>
+              <button onClick={onToggleCreditLag} style={{
+                display: "flex", alignItems: "center", gap: 6, border: "none", background: creditLag ? COLORS.sageLight : COLORS.card,
+                color: creditLag ? COLORS.sage : COLORS.sub, padding: "6px 10px", borderRadius: 9, fontSize: 11.5, fontWeight: 600, cursor: "pointer"
+              }}>
+                💳 חיוב אשראי בחודש הבא {creditLag ? "✓" : ""}
+              </button>
+            </div>
+            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
+              <label style={labelStyle}>יתרת פתיחה בבנק</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div style={{ flex: "0 1 140px" }}>
+                  <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
+                    style={{ ...inputStyle, textAlign: "center", fontWeight: 700 }} />
+                </div>
+                <div style={{ flex: "0 1 175px" }}>
+                  <label style={labelStyle}>נכון לתאריך</label>
+                  <input type="date" value={openingBalanceDate || ""} onChange={(e) => onSetOpeningBalanceDate(e.target.value)}
+                    style={{ ...inputStyle }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>
+                {openingBalanceDate
+                  ? "היתרה מתייחסת לתחילת היום שנבחר, לפני התנועות של אותו יום. התחזית סופרת רק תנועות מהתאריך והלאה (כולל אותו יום), ותנועות קודמות לא נספרות פעמיים. אם היתרה בבנק כבר כוללת את תנועות היום, בחרו את התאריך של מחר."
+                  : "ללא תאריך, היתרה נחשבת יתרת פתיחה של חודש התחזית הראשון (החודש הבא)."}
+              </div>
+            </div>
+            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
+              <label style={labelStyle}>יום חיוב אשראי בחודש</label>
+              <input type="number" min="1" max="31" defaultValue={creditBillingDay} onBlur={(e) => onSetCreditBillingDay(Number(e.target.value) || 1)}
+                style={{ ...inputStyle, maxWidth: 100, textAlign: "center", fontWeight: 700 }} />
+            </div>
+
+            <RecurringIncomesPanel recurringIncomes={recurringIncomes} incomeEntries={incomeEntries} onSave={onSaveRecurring} onLink={onLinkEntries} />
+
+            <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 12, paddingTop: 6 }}>
+              <button onClick={() => setCardsOpen(o => !o)} aria-expanded={cardsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+                <span>💳 ניהול כרטיסי אשראי ({cards.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{cardsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
+              </button>
+              {cardsOpen && (
+                <div style={{ paddingBottom: 12 }}>
+                  <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>
+                    כרטיס נכנס לתחזית רק אחרי שהוגדרו לו יום חיוב וחודש חיוב. אין ערכי ברירת מחדל, והמועד בתחזית הוא הערכה לפי ההגדרות שהזנת ולא מועד בנקאי מאומת. הוצאות ללא כרטיס ממשיכות לפי ההגדרה הגלובלית.
+                  </div>
+                  {cards.map(c => {
+                    const used = fixedExpenses.filter(f => f.cardId === c.id).length;
+                    const miss = cardMissingSettings(c);
+                    const upd = (patch) => onSaveCards(cards.map(x => x.id === c.id ? { ...x, ...patch } : x));
+                    const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 15, fontFamily: "inherit", minWidth: 0, padding: "0 6px" };
+                    return (
+                      <div key={c.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input aria-label="שם הכרטיס" defaultValue={c.name} placeholder="שם הכרטיס" onBlur={e => { const v = e.target.value.trim(); if (v && v !== c.name) upd({ name: v }); }}
+                            style={{ ...sel, flex: 1, fontWeight: 700, fontSize: 16 }} />
+                          {used === 0
+                            ? <button aria-label="מחיקת כרטיס" onClick={() => onSaveCards(cards.filter(x => x.id !== c.id))} style={{ width: 44, height: 40, borderRadius: 10, border: "none", background: COLORS.paper, color: COLORS.coral, cursor: "pointer", fontSize: 16 }}>🗑</button>
+                            : <span style={{ fontSize: 11, color: COLORS.sub, whiteSpace: "nowrap" }}>בשימוש ב־{used}</span>}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                          <div><label style={labelStyle}>יום חיוב</label>
+                            <select aria-label="יום חיוב" value={Number.isInteger(c.billingDay) ? String(c.billingDay) : ""} onChange={e => upd({ billingDay: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                              <option value="">לא הוגדר</option>
+                              {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+                            </select></div>
+                          <div><label style={labelStyle}>חודש החיוב</label>
+                            <select aria-label="חודש החיוב" value={Number.isInteger(c.lag) ? String(c.lag) : ""} onChange={e => upd({ lag: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                              <option value="">לא הוגדר</option>
+                              <option value="0">באותו חודש ההוצאה</option>
+                              <option value="1">חודש אחרי</option>
+                              <option value="2">חודשיים אחרי</option>
+                              <option value="3">3 חודשים אחרי</option>
+                            </select></div>
+                        </div>
+                        {miss && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ {miss} — הכרטיס לא ישובץ בתזרים</div>}
+                      </div>
+                    );
+                  })}
+                  <div style={{ display: "flex", gap: 8, borderTop: cards.length ? `1px solid ${COLORS.mist}` : "none", paddingTop: 10 }}>
+                    <input aria-label="שם כרטיס חדש" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם כרטיס חדש (למשל: ויזה 5808)"
+                      style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 16, padding: "0 10px", fontFamily: "inherit" }} />
+                    <button disabled={!newCardName.trim()} onClick={() => { onSaveCards([...cards, { id: uid(), name: newCardName.trim(), billingDay: null, lag: null }]); setNewCardName(""); }}
+                      style={{ minHeight: 40, padding: "0 14px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: newCardName.trim() ? 1 : 0.5 }}>הוספה</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
