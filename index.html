@@ -117,7 +117,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
-const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
+const JSONBIN_ID = "6ae44ee2ffd5d1605397e826"; // TEMP FIXTURE - revert before final // מאגר קבוע - משותף לשני המשתמשים
 const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, cashBudgets: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
@@ -1462,9 +1462,11 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const sourceCash = cashOf(sourceMonthKey, autoVariableSpend);
     const autoVariableCredit = autoVariableSpend - sourceCash;
     const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key, totalBudget));
-    // בחודש העוגן לא ידוע כמה מקניות המזומן כבר משוקף ביתרת הפתיחה - לא סופרים אותן כדי למנוע ספירה כפולה
-    const cashAnchorExcluded = isAnchorMonth && cashRaw > 0;
-    const cashDirect = cashAnchorExcluded ? 0 : cashRaw;
+    // עוגן מתוארך (תחילת היום, כולל אותו יום): היתרה כבר משקפת תנועות שלפני יום העוגן, ולכן קניות המזומן נספרות
+    // רק באופן יחסי מהיום הזה והלאה - כמו שאר התנועות המסוננות לפי fromDay. עוגן ביום 1 = כל החודש נספר.
+    const cashAnchorDays = isAnchorMonth ? Math.max(dim - fromDay + 1, 0) : dim;
+    const cashAnchorPartial = isAnchorMonth && cashRaw > 0 && cashAnchorDays < dim;
+    const cashDirect = cashRaw * cashAnchorDays / dim;
     const autoCreditLump = creditFixedTotal + autoVariableCredit;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
     const ovrMeta = hasOverride ? ((variableOverrideMeta || {})[m.key] || null) : null;
@@ -1494,7 +1496,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     const keep = !anchorInfo ? m.offset >= 1 : (anchorInfo.unsupported ? false : m.key >= anchorInfo.key);
-    return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, sourceMonthKey, sourceCash, autoVariableCredit, cashRaw, cashDirect, cashAnchorExcluded, dimDays: dim, creditLump, plannedForMonth, plannedTotal, hasOverride, ovrMeta, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
+    return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, sourceMonthKey, sourceCash, autoVariableCredit, cashRaw, cashDirect, cashAnchorPartial, cashAnchorDays, dimDays: dim, creditLump, plannedForMonth, plannedTotal, hasOverride, ovrMeta, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
   }).filter(r => r.keep);
 
   let running = Number(openingBalance) || 0;
@@ -1506,7 +1508,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     let minBal = openingForMonth;
     let minDay = r.fromDay || 1;
     // קניות מזומן/ביט מתפרסות שווה בשווה על ימות החודש לצורך הערכת היתרה היומית (אין תאריך ידוע לתזמון האמיתי)
-    const cashPerDay = r.cashDirect > 0 ? r.cashDirect / r.dimDays : 0;
+    const cashPerDay = r.cashDirect > 0 ? r.cashDirect / Math.max(r.dimDays - (r.fromDay || 1) + 1, 1) : 0;
     let prevDay = (r.fromDay || 1) - 1;
     const timeline = r.events.map(ev => {
       bal -= cashPerDay * (ev.day - prevDay);
@@ -1722,9 +1724,9 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               )}
               <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
               {r.cashDirect > 0 && <Row label="קניות במזומן/ביט (חיוב ישיר באותו חודש)" value={"-" + fmt(r.cashDirect)} />}
-              {r.cashAnchorExcluded && (
-                <div role="alert" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
-                  ⚠️ קניות במזומן/ביט של חודש זה ({fmt(r.cashRaw)}) אינן נספרות כאן: לא ידוע כמה מהן כבר משוקף ביתרת הפתיחה{anchorInfo ? ` של ${anchorInfo.dateLabel}` : ""}, וספירתן הייתה סופרת אותן פעמיים.
+              {r.cashAnchorPartial && (
+                <div role="note" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
+                  ℹ️ קניות במזומן/ביט: נספרים {fmt(r.cashDirect)} מתוך {fmt(r.cashRaw)}, הערכה לפי פיזור שווה מה־{r.fromDay} בחודש והלאה. החלק שלפני כן משוקף כבר ביתרת הפתיחה{anchorInfo ? ` של ${anchorInfo.dateLabel}` : ""} ואינו נספר שוב.
                 </div>
               )}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
@@ -1773,7 +1775,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
               <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
                 <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>{r.isAnchorMonth && anchorInfo ? `יתרה בתחילת ${anchorInfo.dateLabel}: ${fmt(r.openingForMonth)}` : `יתרת פתיחה לחודש: ${fmt(r.openingForMonth)}`}</div>
-                {r.cashDirect > 0 && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>קניות מזומן/ביט ({fmt(r.cashDirect)}) מתפרסות שווה בשווה על ימות החודש לצורך ההערכה היומית; התזמון בפועל משתנה.</div>}
+                {r.cashDirect > 0 && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>קניות מזומן/ביט ({fmt(r.cashDirect)}) מתפרסות שווה בשווה על {r.isAnchorMonth ? `ימי החודש מה־${r.fromDay} ואילך` : "ימות החודש"} לצורך ההערכה היומית; התזמון בפועל משתנה.</div>}
                 {r.isAnchorMonth && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>מוצגות תנועות מה־{r.fromDay} בחודש והלאה (כולל אותו יום). תנועות מוקדמות יותר משוקפות ביתרה ואינן נספרות שוב.</div>}
                 {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
                 {r.timeline.map((ev, i) => (
@@ -2010,6 +2012,8 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
             : "כרגע כל התקציב מחושב כאשראי (יורד בחיוב האשראי)."}
           <br />
           ביט בטעינת אשראי יורד בחיוב האשראי, ולכן נספר בחלק האשראי. הסכום לא יכול לעבור את סך התקציב החודשי.
+          <br />
+          החלוקה חלה על החודש המוצג בלבד ואינה עוברת אוטומטית לחודשים הבאים; חודש ללא חלוקה מחושב כאשראי במלואו.
         </div>
       </div>
       {!adding ? (
