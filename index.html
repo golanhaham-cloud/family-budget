@@ -1420,7 +1420,10 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const rowsRaw = months.map((m) => {
     const isAnchorMonth = !!(anchorInfo && !anchorInfo.unsupported && m.key === anchorInfo.key);
     const fromDay = isAnchorMonth ? anchorInfo.day : 1;
-    const inRange = (d) => (Number(d) || 1) >= fromDay;
+    // יום בחודש תמיד בתחום החודש בפועל (למשל יום 31 בספטמבר מוצג כ־30), גם בסינון וגם בתצוגה.
+    const dim = daysInMonthKey(m.key);
+    const clampDay = (d) => Math.min(Number(d) || 1, dim);
+    const inRange = (d) => clampDay(d) >= fromDay;
     const entries = incomeEntries.filter(e => e.monthKey === m.key && inRange(e.day));
     const recInfoFull = recurringIncomeItemsForMonth(recurringIncomes, incomeEntries, m.key);
     const recInfo = { ...recInfoFull, items: recInfoFull.items.filter(x => inRange(x.day)) };
@@ -1450,15 +1453,15 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
     // build day-by-day timeline
     const events = [];
-    entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}${e.recurringIncomeId ? " · עוקף קבועה" : ""}`, amount: Number(e.amount) || 0 }));
-    recInfo.items.forEach(x => events.push({ day: x.day, label: `💰 ${x.r.name} · קבועה${x.bonus ? " · בונוס" : ""}`, amount: x.amount }));
-    directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
+    entries.forEach(e => events.push({ day: clampDay(e.day), label: `💰 ${e.source}${e.recurringIncomeId ? " · עוקף קבועה" : ""}`, amount: Number(e.amount) || 0 }));
+    recInfo.items.forEach(x => events.push({ day: clampDay(x.day), label: `💰 ${x.r.name} · קבועה${x.bonus ? " · בונוס" : ""}`, amount: x.amount }));
+    directFixed.forEach(f => events.push({ day: clampDay(f.dueDay), label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
     if (includeGlobalCredit && globalCredit > 0) {
       const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
-      events.push({ day: Number(creditBillingDay) || 1, label, amount: -globalCredit });
+      events.push({ day: clampDay(creditBillingDay), label, amount: -globalCredit });
     }
-    cardLines.forEach(cl => events.push({ day: cl.day, label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
+    cardLines.forEach(cl => events.push({ day: clampDay(cl.day), label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     const keep = !anchorInfo ? m.offset >= 1 : (anchorInfo.unsupported ? false : m.key >= anchorInfo.key);
