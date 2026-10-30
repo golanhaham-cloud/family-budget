@@ -301,6 +301,7 @@ function validateIncomeLink(rid, ids, incomeEntries) {
 
 
 /* ---------- DEMO (preview only): deterministic fixture, no jsonbin ---------- */
+const DEMO_ANCHOR = (new URLSearchParams((window.location.hash || "").replace(/^#/, "")).get("anchor")) || "2026-10-29";
 const DEMO_DATA = normalizeData({
   categories: DEFAULT_CATEGORIES,
   budgets: {},
@@ -318,7 +319,7 @@ const DEMO_DATA = normalizeData({
     { id: "p1", name: "מתנה (דמו)", amount: 300, date: "2026-10-30" },
     { id: "p2", name: "מלונות (דמו)", amount: 13200, date: "2026-12-30" }
   ],
-  settings: { creditLag: false, openingBalance: -12500, openingBalanceDate: "2026-10-29", creditBillingDay: 2, variableOverrides: { "2026-11": 19829.56 }, lastAdvice: null, advices: [], cards: [] }
+  settings: { creditLag: false, openingBalance: -12500, openingBalanceDate: DEMO_ANCHOR, creditBillingDay: 2, variableOverrides: { "2026-11": 19829.56 }, lastAdvice: null, advices: [], cards: [] }
 });
 
 async function jsonbinCreate() {
