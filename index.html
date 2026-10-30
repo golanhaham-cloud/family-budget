@@ -75,8 +75,8 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "20";
-const APP_VERSION_DATE = "29.10.2026";
+const APP_VERSION = "21";
+const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
@@ -1385,6 +1385,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const [cardsOpen, setCardsOpen] = useState(false);
   const [ovr, setOvr] = useState(null); // { key, rid, amount, day, err }
   const [newCardName, setNewCardName] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const months = useMemo(() => {
     const arr = [];
@@ -1459,218 +1460,240 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 2px 4px" }}>
-        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
-        <button onClick={onToggleCreditLag} style={{
-          display: "flex", alignItems: "center", gap: 6, border: "none", background: creditLag ? COLORS.sageLight : COLORS.card,
-          color: creditLag ? COLORS.sage : COLORS.sub, padding: "6px 10px", borderRadius: 9, fontSize: 11.5, fontWeight: 600, cursor: "pointer"
-        }}>
-          💳 חיוב אשראי בחודש הבא {creditLag ? "✓" : ""}
-        </button>
-      </div>
+      <div style={{ margin: "6px 2px 4px", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
       <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
-        לחץ על חודש כדי לראות את סדר הכניסות וההוצאות היומי בפועל, כולל הנקודה הכי נמוכה בחודש
+        כל חודש מציג בראש את היתרה הצפויה בסופו. לחיצה על חודש פותחת את הפירוט המלא, כולל סדר הכניסות וההוצאות היומי והנקודה הנמוכה בחודש
       </div>
-
-      <div style={{ background: COLORS.card, borderRadius: 14, padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <label style={{ fontSize: 12.5, color: COLORS.sub, fontWeight: 600 }}>יתרת פתיחה בבנק (נכון להיום)</label>
-        <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
-          style={{ width: 110, padding: "7px 10px", borderRadius: 9, border: `1.5px solid ${COLORS.mist}`, fontSize: 13.5, textAlign: "center", fontWeight: 700 }} />
-      </div>
-      <div style={{ background: COLORS.card, borderRadius: 14, padding: "10px 14px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <label style={{ fontSize: 12.5, color: COLORS.sub, fontWeight: 600 }}>יום חיוב אשראי בחודש</label>
-        <input type="number" min="1" max="31" defaultValue={creditBillingDay} onBlur={(e) => onSetCreditBillingDay(Number(e.target.value) || 1)}
-          style={{ width: 70, padding: "7px 10px", borderRadius: 9, border: `1.5px solid ${COLORS.mist}`, fontSize: 13.5, textAlign: "center", fontWeight: 700 }} />
-      </div>
-
-      <RecurringIncomesPanel recurringIncomes={recurringIncomes} incomeEntries={incomeEntries} onSave={onSaveRecurring} onLink={onLinkEntries} />
 
       {rows.some(r => r.partial) && (
-        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12, lineHeight: 1.5 }}>
+        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
           ⚠️ היתרה החזויה חלקית: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בכל חודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.
         </div>
       )}
+      {rows.filter(r => r.minBal < r.openingForMonth && r.minBal < 0).map(r => (
+        <div key={r.key} role="alert" style={{ background: COLORS.coralLight, color: COLORS.coral, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ⚠️ {r.label}: היתרה צפויה לרדת עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""} — לפני שהיא מתאזנת בסוף החודש
+        </div>
+      ))}
+
       <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
-        <button onClick={() => setCardsOpen(o => !o)} aria-expanded={cardsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
-          <span>💳 ניהול כרטיסי אשראי ({cards.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{cardsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
+        <button onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+          <span>⚙️ הגדרות תחזית</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{settingsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
         </button>
-        {cardsOpen && (
+        {settingsOpen && (
           <div style={{ paddingBottom: 12 }}>
-            <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>
-              כרטיס נכנס לתחזית רק אחרי שהוגדרו לו יום חיוב וחודש חיוב. אין ערכי ברירת מחדל, והמועד בתחזית הוא הערכה לפי ההגדרות שהזנת ולא מועד בנקאי מאומת. הוצאות ללא כרטיס ממשיכות לפי ההגדרה הגלובלית.
+            <div style={{ marginBottom: 10 }}>
+              <label style={labelStyle}>מועד חיוב האשראי</label>
+              <button onClick={onToggleCreditLag} style={{
+                display: "flex", alignItems: "center", gap: 6, border: "none", background: creditLag ? COLORS.sageLight : COLORS.card,
+                color: creditLag ? COLORS.sage : COLORS.sub, padding: "6px 10px", borderRadius: 9, fontSize: 11.5, fontWeight: 600, cursor: "pointer"
+              }}>
+                💳 חיוב אשראי בחודש הבא {creditLag ? "✓" : ""}
+              </button>
             </div>
-            {cards.map(c => {
-              const used = fixedExpenses.filter(f => f.cardId === c.id).length;
-              const miss = cardMissingSettings(c);
-              const upd = (patch) => onSaveCards(cards.map(x => x.id === c.id ? { ...x, ...patch } : x));
-              const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 15, fontFamily: "inherit", minWidth: 0, padding: "0 6px" };
-              return (
-                <div key={c.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input aria-label="שם הכרטיס" defaultValue={c.name} placeholder="שם הכרטיס" onBlur={e => { const v = e.target.value.trim(); if (v && v !== c.name) upd({ name: v }); }}
-                      style={{ ...sel, flex: 1, fontWeight: 700, fontSize: 16 }} />
-                    {used === 0
-                      ? <button aria-label="מחיקת כרטיס" onClick={() => onSaveCards(cards.filter(x => x.id !== c.id))} style={{ width: 44, height: 40, borderRadius: 10, border: "none", background: COLORS.paper, color: COLORS.coral, cursor: "pointer", fontSize: 16 }}>🗑</button>
-                      : <span style={{ fontSize: 11, color: COLORS.sub, whiteSpace: "nowrap" }}>בשימוש ב־{used}</span>}
+            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
+              <label style={labelStyle}>יתרת פתיחה בבנק (נכון להיום)</label>
+              <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
+                style={{ ...inputStyle, maxWidth: 170, textAlign: "center", fontWeight: 700 }} />
+            </div>
+            <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
+              <label style={labelStyle}>יום חיוב אשראי בחודש</label>
+              <input type="number" min="1" max="31" defaultValue={creditBillingDay} onBlur={(e) => onSetCreditBillingDay(Number(e.target.value) || 1)}
+                style={{ ...inputStyle, maxWidth: 100, textAlign: "center", fontWeight: 700 }} />
+            </div>
+
+            <RecurringIncomesPanel recurringIncomes={recurringIncomes} incomeEntries={incomeEntries} onSave={onSaveRecurring} onLink={onLinkEntries} />
+
+            <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 12, paddingTop: 6 }}>
+              <button onClick={() => setCardsOpen(o => !o)} aria-expanded={cardsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+                <span>💳 ניהול כרטיסי אשראי ({cards.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{cardsOpen ? "סגירה ▴" : "פתיחה ▾"}</span>
+              </button>
+              {cardsOpen && (
+                <div style={{ paddingBottom: 12 }}>
+                  <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>
+                    כרטיס נכנס לתחזית רק אחרי שהוגדרו לו יום חיוב וחודש חיוב. אין ערכי ברירת מחדל, והמועד בתחזית הוא הערכה לפי ההגדרות שהזנת ולא מועד בנקאי מאומת. הוצאות ללא כרטיס ממשיכות לפי ההגדרה הגלובלית.
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                    <div><label style={labelStyle}>יום חיוב</label>
-                      <select aria-label="יום חיוב" value={Number.isInteger(c.billingDay) ? String(c.billingDay) : ""} onChange={e => upd({ billingDay: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
-                        <option value="">לא הוגדר</option>
-                        {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
-                      </select></div>
-                    <div><label style={labelStyle}>חודש החיוב</label>
-                      <select aria-label="חודש החיוב" value={Number.isInteger(c.lag) ? String(c.lag) : ""} onChange={e => upd({ lag: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
-                        <option value="">לא הוגדר</option>
-                        <option value="0">באותו חודש ההוצאה</option>
-                        <option value="1">חודש אחרי</option>
-                        <option value="2">חודשיים אחרי</option>
-                        <option value="3">3 חודשים אחרי</option>
-                      </select></div>
+                  {cards.map(c => {
+                    const used = fixedExpenses.filter(f => f.cardId === c.id).length;
+                    const miss = cardMissingSettings(c);
+                    const upd = (patch) => onSaveCards(cards.map(x => x.id === c.id ? { ...x, ...patch } : x));
+                    const sel = { height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontSize: 15, fontFamily: "inherit", minWidth: 0, padding: "0 6px" };
+                    return (
+                      <div key={c.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <input aria-label="שם הכרטיס" defaultValue={c.name} placeholder="שם הכרטיס" onBlur={e => { const v = e.target.value.trim(); if (v && v !== c.name) upd({ name: v }); }}
+                            style={{ ...sel, flex: 1, fontWeight: 700, fontSize: 16 }} />
+                          {used === 0
+                            ? <button aria-label="מחיקת כרטיס" onClick={() => onSaveCards(cards.filter(x => x.id !== c.id))} style={{ width: 44, height: 40, borderRadius: 10, border: "none", background: COLORS.paper, color: COLORS.coral, cursor: "pointer", fontSize: 16 }}>🗑</button>
+                            : <span style={{ fontSize: 11, color: COLORS.sub, whiteSpace: "nowrap" }}>בשימוש ב־{used}</span>}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                          <div><label style={labelStyle}>יום חיוב</label>
+                            <select aria-label="יום חיוב" value={Number.isInteger(c.billingDay) ? String(c.billingDay) : ""} onChange={e => upd({ billingDay: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                              <option value="">לא הוגדר</option>
+                              {Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+                            </select></div>
+                          <div><label style={labelStyle}>חודש החיוב</label>
+                            <select aria-label="חודש החיוב" value={Number.isInteger(c.lag) ? String(c.lag) : ""} onChange={e => upd({ lag: e.target.value === "" ? null : Number(e.target.value) })} style={{ ...sel, width: "100%" }}>
+                              <option value="">לא הוגדר</option>
+                              <option value="0">באותו חודש ההוצאה</option>
+                              <option value="1">חודש אחרי</option>
+                              <option value="2">חודשיים אחרי</option>
+                              <option value="3">3 חודשים אחרי</option>
+                            </select></div>
+                        </div>
+                        {miss && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ {miss} — הכרטיס לא ישובץ בתזרים</div>}
+                      </div>
+                    );
+                  })}
+                  <div style={{ display: "flex", gap: 8, borderTop: cards.length ? `1px solid ${COLORS.mist}` : "none", paddingTop: 10 }}>
+                    <input aria-label="שם כרטיס חדש" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם כרטיס חדש (למשל: ויזה 5808)"
+                      style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 16, padding: "0 10px", fontFamily: "inherit" }} />
+                    <button disabled={!newCardName.trim()} onClick={() => { onSaveCards([...cards, { id: uid(), name: newCardName.trim(), billingDay: null, lag: null }]); setNewCardName(""); }}
+                      style={{ minHeight: 40, padding: "0 14px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: newCardName.trim() ? 1 : 0.5 }}>הוספה</button>
                   </div>
-                  {miss && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ {miss} — הכרטיס לא ישובץ בתזרים</div>}
                 </div>
-              );
-            })}
-            <div style={{ display: "flex", gap: 8, borderTop: cards.length ? `1px solid ${COLORS.mist}` : "none", paddingTop: 10 }}>
-              <input aria-label="שם כרטיס חדש" value={newCardName} onChange={e => setNewCardName(e.target.value)} placeholder="שם כרטיס חדש (למשל: ויזה 5808)"
-                style={{ flex: 1, minWidth: 0, height: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 16, padding: "0 10px", fontFamily: "inherit" }} />
-              <button disabled={!newCardName.trim()} onClick={() => { onSaveCards([...cards, { id: uid(), name: newCardName.trim(), billingDay: null, lag: null }]); setNewCardName(""); }}
-                style={{ minHeight: 40, padding: "0 14px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", opacity: newCardName.trim() ? 1 : 0.5 }}>הוספה</button>
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {rows.map((r, idx) => (
+      {rows.map((r) => (
         <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
-          <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, cursor: "pointer" }}>
-            <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label} {expandedMonth === r.key ? "▲" : "▼"}</div>
-            <div style={{ fontWeight: 800, fontSize: 15, color: r.balance >= 0 ? COLORS.sage : COLORS.coral }}>
-              {r.balance >= 0 ? "+" : ""}{fmt(r.balance)}
+          <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} role="button" aria-expanded={expandedMonth === r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, cursor: "pointer", minHeight: 44 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                {r.runPartial && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6400", background: COLORS.amberLight, borderRadius: 6, padding: "2px 6px" }}>חלקי</span>}
+                {r.minBal < r.openingForMonth && r.minBal < 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
+              </div>
             </div>
+            <div style={{ textAlign: "left", flexShrink: 0 }}>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 17, color: r.running >= 0 ? COLORS.sage : COLORS.coral, lineHeight: 1.25 }}>{fmt(r.running)}</div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: COLORS.sub }}>יתרה בסוף החודש{r.runPartial ? " (חלקי)" : ""}</div>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: r.balance >= 0 ? COLORS.sage : COLORS.coral, marginTop: 2 }}>נטו החודש: {r.balance >= 0 ? "+" : ""}{fmt(r.balance)}</div>
+            </div>
+            <span style={{ color: COLORS.sub, fontSize: 12, flexShrink: 0 }}>{expandedMonth === r.key ? "▲" : "▼"}</span>
           </div>
-          <Row label="הכנסות" value={fmt(r.income)} />
-          {(r.recInfo.items.length > 0 || r.recInfo.overridden.length > 0) && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "2px 0 6px" }}>
-              {r.recInfo.items.map(x => (
-                <div key={x.r.id} style={{ background: COLORS.sageLight, borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                    <span style={{ overflowWrap: "anywhere", minWidth: 0 }}><b style={{ color: COLORS.sage }}>קבועה</b>{x.bonus ? " · בונוס" : ""} · {x.r.name} (יום {x.day})</span>
-                    <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(x.amount)}</span>
-                  </div>
-                  {ovr && ovr.key === r.key && ovr.rid === x.r.id ? (
-                    <div style={{ marginTop: 6 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                        <div><label style={labelStyle}>סכום לחודש זה (₪, 0 = דילוג)</label>
-                          <input aria-label="סכום לחודש זה" type="number" inputMode="decimal" min="0" value={ovr.amount} onChange={e => setOvr({ ...ovr, amount: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
-                        <div><label style={labelStyle}>יום (לא חובה)</label>
-                          <input aria-label="יום בחודש" type="number" inputMode="numeric" min="1" max="31" placeholder={String(x.day)} value={ovr.day} onChange={e => setOvr({ ...ovr, day: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
-                      </div>
-                      {ovr.err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12, fontWeight: 600, marginTop: 6 }}>{ovr.err}</div>}
-                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <button onClick={() => setOvr(null)} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>ביטול</button>
-                        <button onClick={() => {
-                          const d = ovr.day === "" ? null : Number(ovr.day);
-                          const e = validateIncomeOverride(x.r.id, r.key, ovr.amount, incomeEntries) || (d !== null && (!Number.isInteger(d) || d < 1 || d > 31) ? "היום חייב להיות בין 1 ל־31" : "");
-                          if (e) return setOvr({ ...ovr, err: e });
-                          onAddOverride(x.r.id, r.key, Number(ovr.amount), d); setOvr(null);
-                        }} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>שמירה לחודש זה בלבד</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button onClick={() => setOvr({ key: r.key, rid: x.r.id, amount: "", day: "", err: "" })} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 12, fontWeight: 700, textDecoration: "underline", cursor: "pointer", minHeight: 32, padding: 0, marginTop: 2 }}>שנה לחודש זה</button>
-                  )}
-                </div>
-              ))}
-              {r.recInfo.overridden.map(o => (
-                <div key={o.r.id} style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
-                  <b>עוקף קבועה</b> · {o.r.name}: {fmt(o.entry.amount)} במקום {fmt(o.calc.amount)}{o.calc.bonus ? " (בונוס)" : ""}
-                </div>
-              ))}
-            </div>
-          )}
-          <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
-            <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
-                style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
-              {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
-            </span>
-          </div>
-          {r.cardLines.length > 0 && (
-            <div style={{ fontSize: 11.5, color: COLORS.sub, padding: "0 0 4px", lineHeight: 1.6 }}>
-              <div>מתוך סך האשראי: גלובלי {fmt(r.globalCredit)}</div>
-              {r.cardLines.map(cl => <div key={cl.card.id}>💳 {cl.card.name || "כרטיס"}: {fmt(cl.total)} · יום {cl.day} (הערכה)</div>)}
-            </div>
-          )}
-          {r.hasOverride && cards.length > 0 && <div style={{ fontSize: 11.5, color: COLORS.sub, paddingBottom: 4 }}>הסכום הידני מחליף את כל סכומי האשראי בחודש זה, כולל כרטיסים</div>}
-          {r.unscheduled.map(u => (
-            <div key={u.cardId} role="alert" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
-              ⏳ טרם שובץ לתזרים: {u.name} — {fmt(u.total)} <span style={{ opacity: 0.85 }}>({u.why || "חסרות הגדרות חיוב"})</span>
-            </div>
-          ))}
-          {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
-          <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
-            <Row label={r.runPartial ? "יתרה מצטברת חלקית" : "יתרה מצטברת עד חודש זה"} value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
-            {r.runPartial && <div style={{ fontSize: 11.5, color: "#8a6400", marginTop: 2 }}>⚠️ היתרה חלקית: אינה כוללת סכומים שטרם שובצו לתזרים (בחודש זה או בחודשים קודמים)</div>}
-          </div>
-
-          {r.minBal < r.openingForMonth && r.minBal < 0 && (
-            <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 9, background: COLORS.coralLight, color: COLORS.coral, fontSize: 12, fontWeight: 600 }}>
-              ⚠️ בתאריך {r.minDay} לחודש, היתרה צפויה לרדת עד {fmt(r.minBal)}{r.runPartial ? " (חלקי)" : ""} — לפני שהכל מסתדר בסוף החודש
-            </div>
-          )}
 
           {expandedMonth === r.key && (
-            <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>יתרת פתיחה לחודש: {fmt(r.openingForMonth)}</div>
-              {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
-              {r.timeline.map((ev, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: i === r.timeline.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
-                  <span style={{ color: COLORS.sub, width: 28 }}>{ev.day}</span>
-                  <span style={{ flex: 1 }}>{ev.label}</span>
-                  <span style={{ fontWeight: 600, color: ev.amount >= 0 ? COLORS.sage : COLORS.coral, marginLeft: 8 }}>{ev.amount >= 0 ? "+" : ""}{fmt(ev.amount)}</span>
-                  <span style={{ width: 90, textAlign: "left", fontSize: 11, color: ev.after < 0 ? COLORS.coral : COLORS.sub, fontWeight: ev.after < 0 ? 700 : 400 }}>{fmt(ev.after)}</span>
+            <div style={{ marginTop: 8, borderTop: `1px solid ${COLORS.mist}`, paddingTop: 8 }}>
+              <Row label="הכנסות" value={fmt(r.income)} />
+              {(r.recInfo.items.length > 0 || r.recInfo.overridden.length > 0) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "2px 0 6px" }}>
+                  {r.recInfo.items.map(x => (
+                    <div key={x.r.id} style={{ background: COLORS.sageLight, borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                        <span style={{ overflowWrap: "anywhere", minWidth: 0 }}><b style={{ color: COLORS.sage }}>קבועה</b>{x.bonus ? " · בונוס" : ""} · {x.r.name} (יום {x.day})</span>
+                        <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(x.amount)}</span>
+                      </div>
+                      {ovr && ovr.key === r.key && ovr.rid === x.r.id ? (
+                        <div style={{ marginTop: 6 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div><label style={labelStyle}>סכום לחודש זה (₪, 0 = דילוג)</label>
+                              <input aria-label="סכום לחודש זה" type="number" inputMode="decimal" min="0" value={ovr.amount} onChange={e => setOvr({ ...ovr, amount: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
+                            <div><label style={labelStyle}>יום (לא חובה)</label>
+                              <input aria-label="יום בחודש" type="number" inputMode="numeric" min="1" max="31" placeholder={String(x.day)} value={ovr.day} onChange={e => setOvr({ ...ovr, day: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
+                          </div>
+                          {ovr.err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12, fontWeight: 600, marginTop: 6 }}>{ovr.err}</div>}
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <button onClick={() => setOvr(null)} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>ביטול</button>
+                            <button onClick={() => {
+                              const d = ovr.day === "" ? null : Number(ovr.day);
+                              const e = validateIncomeOverride(x.r.id, r.key, ovr.amount, incomeEntries) || (d !== null && (!Number.isInteger(d) || d < 1 || d > 31) ? "היום חייב להיות בין 1 ל־31" : "");
+                              if (e) return setOvr({ ...ovr, err: e });
+                              onAddOverride(x.r.id, r.key, Number(ovr.amount), d); setOvr(null);
+                            }} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>שמירה לחודש זה בלבד</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => setOvr({ key: r.key, rid: x.r.id, amount: "", day: "", err: "" })} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 12, fontWeight: 700, textDecoration: "underline", cursor: "pointer", minHeight: 32, padding: 0, marginTop: 2 }}>שנה לחודש זה</button>
+                      )}
+                    </div>
+                  ))}
+                  {r.recInfo.overridden.map(o => (
+                    <div key={o.r.id} style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                      <b>עוקף קבועה</b> · {o.r.name}: {fmt(o.entry.amount)} במקום {fmt(o.calc.amount)}{o.calc.bonus ? " (בונוס)" : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
+                <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
+                    style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
+                  {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
+                </span>
+              </div>
+              {r.cardLines.length > 0 && (
+                <div style={{ fontSize: 11.5, color: COLORS.sub, padding: "0 0 4px", lineHeight: 1.6 }}>
+                  <div>מתוך סך האשראי: גלובלי {fmt(r.globalCredit)}</div>
+                  {r.cardLines.map(cl => <div key={cl.card.id}>💳 {cl.card.name || "כרטיס"}: {fmt(cl.total)} · יום {cl.day} (הערכה)</div>)}
+                </div>
+              )}
+              {r.hasOverride && cards.length > 0 && <div style={{ fontSize: 11.5, color: COLORS.sub, paddingBottom: 4 }}>הסכום הידני מחליף את כל סכומי האשראי בחודש זה, כולל כרטיסים</div>}
+              {r.unscheduled.map(u => (
+                <div key={u.cardId} role="alert" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
+                  ⏳ טרם שובץ לתזרים: {u.name} — {fmt(u.total)} <span style={{ opacity: 0.85 }}>({u.why || "חסרות הגדרות חיוב"})</span>
                 </div>
               ))}
-            </div>
-          )}
+              {r.plannedTotal > 0 && <Row label="הוצאות מתוכננות חד-פעמיות" value={"-" + fmt(r.plannedTotal)} />}
+              <div style={{ borderTop: `1px solid ${COLORS.mist}`, marginTop: 6, paddingTop: 6 }}>
+                <Row label={r.runPartial ? "יתרה מצטברת חלקית" : "יתרה מצטברת עד חודש זה"} value={fmt(r.running)} bold color={r.running >= 0 ? COLORS.sage : COLORS.coral} />
+                {r.runPartial && <div style={{ fontSize: 11.5, color: "#8a6400", marginTop: 2 }}>⚠️ היתרה חלקית: אינה כוללת סכומים שטרם שובצו לתזרים (בחודש זה או בחודשים קודמים)</div>}
+              </div>
 
-          {r.plannedForMonth.length > 0 && (
-            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-              {r.plannedForMonth.map(p => (
-                <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 8, padding: "5px 8px" }}>
-                  <span>📌 {p.name} ({p.date.split("-").reverse().join("/")})</span>
-                  <span>{fmt(p.amount)}</span>
+              <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
+                <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>יתרת פתיחה לחודש: {fmt(r.openingForMonth)}</div>
+                {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
+                {r.timeline.map((ev, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: i === r.timeline.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+                    <span style={{ color: COLORS.sub, width: 28 }}>{ev.day}</span>
+                    <span style={{ flex: 1 }}>{ev.label}</span>
+                    <span style={{ fontWeight: 600, color: ev.amount >= 0 ? COLORS.sage : COLORS.coral, marginLeft: 8 }}>{ev.amount >= 0 ? "+" : ""}{fmt(ev.amount)}</span>
+                    <span style={{ width: 90, textAlign: "left", fontSize: 11, color: ev.after < 0 ? COLORS.coral : COLORS.sub, fontWeight: ev.after < 0 ? 700 : 400 }}>{fmt(ev.after)}</span>
+                  </div>
+                ))}
+              </div>
+
+              {r.plannedForMonth.length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {r.plannedForMonth.map(p => (
+                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 8, padding: "5px 8px" }}>
+                      <span>📌 {p.name} ({p.date.split("-").reverse().join("/")})</span>
+                      <span>{fmt(p.amount)}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {r.entries.length > 0 && (
-            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-              {r.entries.map(e => (
-                <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.sub, background: COLORS.paper, borderRadius: 8, padding: "5px 8px" }}>
-                  <span>{e.source} (יום {e.day || 1}){e.recurringIncomeId ? <b style={{ color: "#8a6400" }}> · {(recurringIncomes || []).some(x => x.id === e.recurringIncomeId) ? "עוקף קבועה" : "הייתה מקושרת לקבועה שנמחקה"}</b> : null}</span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{fmt(e.amount)}
-                    <button onClick={() => onRemoveIncome(e.id)} style={{ border: "none", background: "none", color: COLORS.coral, cursor: "pointer", fontSize: 12 }}>✕</button>
-                  </span>
+              {r.entries.length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+                  {r.entries.map(e => (
+                    <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.sub, background: COLORS.paper, borderRadius: 8, padding: "5px 8px" }}>
+                      <span>{e.source} (יום {e.day || 1}){e.recurringIncomeId ? <b style={{ color: "#8a6400" }}> · {(recurringIncomes || []).some(x => x.id === e.recurringIncomeId) ? "עוקף קבועה" : "הייתה מקושרת לקבועה שנמחקה"}</b> : null}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{fmt(e.amount)}
+                        <button onClick={() => onRemoveIncome(e.id)} style={{ border: "none", background: "none", color: COLORS.coral, cursor: "pointer", fontSize: 12 }}>✕</button>
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          {openMonth === r.key ? (
-            <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-              <input placeholder="מקור" value={srcDraft} onChange={e => setSrcDraft(e.target.value)} style={{ ...selectStyle, flex: 2 }} />
-              <input type="number" placeholder="סכום" value={amtDraft} onChange={e => setAmtDraft(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
-              <input type="number" placeholder="יום" min="1" max="31" value={dayDraft} onChange={e => setDayDraft(e.target.value)} style={{ ...selectStyle, flex: 1, minWidth: 50 }} />
-              <button onClick={() => addIncomeHere(r.key)} style={{ border: "none", borderRadius: 8, background: COLORS.sage, color: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>✓</button>
+              {openMonth === r.key ? (
+                <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
+                  <input placeholder="מקור" value={srcDraft} onChange={e => setSrcDraft(e.target.value)} style={{ ...selectStyle, flex: 2 }} />
+                  <input type="number" placeholder="סכום" value={amtDraft} onChange={e => setAmtDraft(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
+                  <input type="number" placeholder="יום" min="1" max="31" value={dayDraft} onChange={e => setDayDraft(e.target.value)} style={{ ...selectStyle, flex: 1, minWidth: 50 }} />
+                  <button onClick={() => addIncomeHere(r.key)} style={{ border: "none", borderRadius: 8, background: COLORS.sage, color: "#fff", padding: "0 12px", fontWeight: 700, cursor: "pointer" }}>✓</button>
+                </div>
+              ) : (
+                <button onClick={() => setOpenMonth(r.key)} style={{ marginTop: 10, width: "100%", padding: "8px", borderRadius: 9, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>＋ הוספת הכנסה</button>
+              )}
             </div>
-          ) : (
-            <button onClick={() => setOpenMonth(r.key)} style={{ marginTop: 10, width: "100%", padding: "8px", borderRadius: 9, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>＋ הוספת הכנסה</button>
           )}
         </div>
       ))}
