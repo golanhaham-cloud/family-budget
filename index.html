@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "19";
+const APP_VERSION = "20";
 const APP_VERSION_DATE = "29.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -118,7 +118,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -126,6 +126,7 @@ function normalizeData(d) {
     expenses: d.expenses || [],
     fixedExpenses: d.fixedExpenses || [],
     incomeEntries: d.incomeEntries || [],
+    recurringIncomes: d.recurringIncomes || [],
     plannedExpenses: d.plannedExpenses || [],
     settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
@@ -231,6 +232,71 @@ function cardForecastForMonth(fixedExpenses, cards, mKey) {
     }
   });
   return { scheduled, unscheduled };
+}
+
+/* ---------- הכנסות קבועות (תוספתי: recurringIncomes, incomeEntries[].recurringIncomeId אופציונלי) ---------- */
+const isEmptyVal = (v) => v === "" || v === null || v === undefined;
+function daysInMonthKey(mKey) { const [y, m] = mKey.split("-").map(Number); return new Date(y, m, 0).getDate(); }
+// הכנסה קבועה חלה בחודש אם הוא בתוך [startMonth, endMonth] (קצוות כלולים). בחודש בונוס bonusAmount מחליף את הסכום הרגיל במלואו.
+// חודש בונוס = חודש העוגן עצמו ואז כל N חודשים אחריו, אף פעם לא לפניו (בדומה ל-anchorMonth בהוצאות קבועות).
+function recurringIncomeForMonth(r, mKey) {
+  if (!MONTH_RE.test(r.startMonth || "") || mKey < r.startMonth) return null;
+  if (MONTH_RE.test(r.endMonth || "") && mKey > r.endMonth) return null;
+  let amount = Number(r.amount) || 0, bonus = false;
+  const n = Number(r.bonusEveryMonths);
+  if (!isEmptyVal(r.bonusAmount) && Number.isInteger(n) && n >= 1 && MONTH_RE.test(r.bonusAnchorMonth || "")
+      && mKey >= r.bonusAnchorMonth && monthsDiff(r.bonusAnchorMonth, mKey) % n === 0) { amount = Number(r.bonusAmount) || 0; bonus = true; }
+  return { amount, bonus, day: Math.min(Math.max(Math.floor(Number(r.day)) || 1, 1), daysInMonthKey(mKey)) };
+}
+// הקישור הוא לפי recurringIncomeId בלבד. רשומה ידנית מקושרת באותו חודש מחליפה את הקבועה (גם בסכום 0) ולכן הקבועה לא נספרת שוב.
+function recurringIncomeItemsForMonth(recurringIncomes, incomeEntries, mKey) {
+  const items = [], overridden = [];
+  (recurringIncomes || []).forEach(r => {
+    const calc = recurringIncomeForMonth(r, mKey);
+    if (!calc) return;
+    const ov = incomeEntries.find(e => e.recurringIncomeId === r.id && e.monthKey === mKey);
+    if (ov) overridden.push({ r, entry: ov, calc });
+    else items.push({ r, ...calc });
+  });
+  return { items, overridden };
+}
+function validateRecurringIncome(x) {
+  if (!String(x.name || "").trim()) return "יש להזין שם להכנסה";
+  const amt = Number(x.amount);
+  if (isEmptyVal(x.amount) || !Number.isFinite(amt) || amt < 0) return "הסכום חייב להיות מספר גדול או שווה לאפס";
+  const day = Number(x.day);
+  if (isEmptyVal(x.day) || !Number.isInteger(day) || day < 1 || day > 31) return "היום בחודש חייב להיות מספר שלם בין 1 ל־31";
+  if (!MONTH_RE.test(x.startMonth || "")) return "יש לבחור חודש התחלה";
+  if (!isEmptyVal(x.endMonth)) {
+    if (!MONTH_RE.test(x.endMonth)) return "חודש הסיום אינו תקין";
+    if (x.endMonth < x.startMonth) return "חודש הסיום לא יכול להיות לפני חודש ההתחלה";
+  }
+  const filled = [x.bonusAmount, x.bonusEveryMonths, x.bonusAnchorMonth].filter(v => !isEmptyVal(v)).length;
+  if (filled !== 0 && filled !== 3) return "שדות הבונוס (סכום, תדירות ועוגן) חייבים להיות מלאים יחד או ריקים יחד";
+  if (filled === 3) {
+    const b = Number(x.bonusAmount), n = Number(x.bonusEveryMonths);
+    if (!Number.isFinite(b) || b < 0) return "סכום הבונוס חייב להיות מספר גדול או שווה לאפס";
+    if (!Number.isInteger(n) || n < 1) return "תדירות הבונוס חייבת להיות מספר שלם חיובי של חודשים";
+    if (!MONTH_RE.test(x.bonusAnchorMonth)) return "חודש העוגן של הבונוס אינו תקין";
+  }
+  return "";
+}
+function validateIncomeOverride(rid, mKey, amount, incomeEntries) {
+  if (incomeEntries.some(e => e.recurringIncomeId === rid && e.monthKey === mKey)) return "כבר קיימת דריסה של ההכנסה הקבועה הזו בחודש הזה";
+  if (isEmptyVal(amount) || !Number.isFinite(Number(amount)) || Number(amount) < 0) return "הסכום חייב להיות מספר גדול או שווה לאפס (0 מדלג על החודש)";
+  return "";
+}
+// קישור רשומות קיימות: רק שדה recurringIncomeId. חוסם בחירה שתיצור שתי רשומות מקושרות לאותו חודש, בלי לבחור בשבילך.
+function validateIncomeLink(rid, ids, incomeEntries) {
+  const chosen = incomeEntries.filter(e => ids.includes(e.id));
+  if (chosen.some(e => e.recurringIncomeId)) return "אחת הרשומות כבר מקושרת להכנסה קבועה";
+  const seen = {};
+  for (const e of chosen) {
+    if (seen[e.monthKey]) return `נבחרו שתי רשומות לאותו חודש (${monthLabelOf(e.monthKey)}). בחר רשומה אחת לכל חודש`;
+    seen[e.monthKey] = true;
+    if (incomeEntries.some(x => x.recurringIncomeId === rid && x.monthKey === e.monthKey)) return `בחודש ${monthLabelOf(e.monthKey)} כבר קיימת רשומה מקושרת להכנסה הזו`;
+  }
+  return "";
 }
 
 async function jsonbinCreate() {
@@ -511,6 +577,18 @@ function BudgetApp() {
   const addIncome = async (monthK, source, amount, day) => {
     await persist({ ...data, incomeEntries: [...data.incomeEntries, { id: uid(), monthKey: monthK, source, amount, day: day || 1 }] });
   };
+  const saveRecurringIncomes = async (list) => {
+    await persist({ ...data, recurringIncomes: list });
+  };
+  const addIncomeOverride = async (rid, monthK, amount, day) => {
+    const r = (data.recurringIncomes || []).find(x => x.id === rid);
+    if (!r || validateIncomeOverride(rid, monthK, amount, data.incomeEntries)) return;
+    await persist({ ...data, incomeEntries: [...data.incomeEntries, { id: uid(), monthKey: monthK, source: r.name, amount: Number(amount), day: day || r.day, recurringIncomeId: rid }] });
+  };
+  const linkIncomeEntries = async (rid, ids) => {
+    if (!(data.recurringIncomes || []).some(x => x.id === rid) || !ids.length || validateIncomeLink(rid, ids, data.incomeEntries)) return;
+    await persist({ ...data, incomeEntries: data.incomeEntries.map(e => ids.includes(e.id) ? { ...e, recurringIncomeId: rid } : e) });
+  };
   const saveCards = async (cards) => {
     await persist({ ...data, settings: { ...data.settings, cards } });
   };
@@ -614,6 +692,7 @@ function BudgetApp() {
             openingBalance={data.settings.openingBalance} onSetOpeningBalance={setOpeningBalance}
             creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay}
             cards={data.settings.cards || []} onSaveCards={saveCards}
+            recurringIncomes={data.recurringIncomes || []} onSaveRecurring={saveRecurringIncomes} onAddOverride={addIncomeOverride} onLinkEntries={linkIncomeEntries}
             variableOverrides={data.settings.variableOverrides} onSetVariableOverride={setVariableOverride} />
         )}
         {tab === "budget" && (
@@ -1160,14 +1239,151 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
   );
 }
 
+/* ================= RECURRING INCOMES ================= */
+function RecurringIncomeForm({ initial, onSubmit, onCancel }) {
+  const i = initial || {};
+  const [f, setF] = useState({ name: i.name || "", amount: isEmptyVal(i.amount) ? "" : String(i.amount), day: isEmptyVal(i.day) ? "" : String(i.day),
+    startMonth: i.startMonth || "", endMonth: i.endMonth || "", bonusAmount: isEmptyVal(i.bonusAmount) ? "" : String(i.bonusAmount),
+    bonusEveryMonths: isEmptyVal(i.bonusEveryMonths) ? "" : String(i.bonusEveryMonths), bonusAnchorMonth: i.bonusAnchorMonth || "" });
+  const [err, setErr] = useState("");
+  const set = (k) => (v) => setF(p => ({ ...p, [k]: v }));
+  const inp = { ...inputStyle, height: 40, fontSize: 16 };
+  const submit = () => {
+    const e = validateRecurringIncome(f);
+    if (e) return setErr(e);
+    const out = { id: i.id || uid(), name: f.name.trim(), amount: Number(f.amount), day: Number(f.day), startMonth: f.startMonth };
+    if (!isEmptyVal(f.endMonth)) out.endMonth = f.endMonth;
+    if (!isEmptyVal(f.bonusAmount)) { out.bonusAmount = Number(f.bonusAmount); out.bonusEveryMonths = Number(f.bonusEveryMonths); out.bonusAnchorMonth = f.bonusAnchorMonth; }
+    onSubmit(out);
+  };
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginTop: 10 };
+  return (
+    <div style={{ background: COLORS.paper, borderRadius: 12, padding: 12, marginTop: 8 }}>
+      <label style={labelStyle}>שם ההכנסה</label>
+      <input aria-label="שם ההכנסה" value={f.name} onChange={e => set("name")(e.target.value)} placeholder="למשל: משכורת" style={inp} />
+      <div style={grid}>
+        <div><label style={labelStyle}>סכום רגיל (₪)</label><input aria-label="סכום רגיל" type="number" inputMode="decimal" min="0" value={f.amount} onChange={e => set("amount")(e.target.value)} style={inp} /></div>
+        <div><label style={labelStyle}>יום בחודש</label><input aria-label="יום בחודש" type="number" inputMode="numeric" min="1" max="31" value={f.day} onChange={e => set("day")(e.target.value)} style={inp} /></div>
+      </div>
+      <div style={grid}>
+        <MonthPicker label="חודש התחלה" value={f.startMonth} onChange={set("startMonth")} allowEmpty />
+        <MonthPicker label="חודש סיום (לא חובה)" value={f.endMonth} onChange={set("endMonth")} allowEmpty />
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 12.5, marginTop: 14 }}>בונוס חוזר (לא חובה, שלושת השדות יחד)</div>
+      <div style={grid}>
+        <div><label style={labelStyle}>סכום בחודש בונוס (₪)</label><input aria-label="סכום בחודש בונוס" type="number" inputMode="decimal" min="0" value={f.bonusAmount} onChange={e => set("bonusAmount")(e.target.value)} style={inp} /></div>
+        <div><label style={labelStyle}>כל כמה חודשים</label><input aria-label="תדירות הבונוס בחודשים" type="number" inputMode="numeric" min="1" value={f.bonusEveryMonths} onChange={e => set("bonusEveryMonths")(e.target.value)} style={inp} /></div>
+      </div>
+      <div style={{ marginTop: 10 }}><MonthPicker label="חודש עוגן לבונוס" value={f.bonusAnchorMonth} onChange={set("bonusAnchorMonth")} allowEmpty /></div>
+      <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>בחודש בונוס הסכום שלו מחליף את הסכום הרגיל (לא מתווסף). חודש העוגן עצמו הוא חודש בונוס, והבונוס חוזר כל N חודשים אחריו ולא לפניו. בחודש קצר ההכנסה נרשמת ביום האחרון.</div>
+      {err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={onCancel} style={{ flex: 1, minHeight: 42, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>ביטול</button>
+        <button onClick={submit} style={{ flex: 1, minHeight: 42, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>שמירה</button>
+      </div>
+    </div>
+  );
+}
+function IncomeLinkDialog({ r, incomeEntries, recurringIncomes, onConfirm, onClose }) {
+  const [sel, setSel] = useState([]);
+  const cands = incomeEntries.filter(e => !e.recurringIncomeId).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  const linkedElsewhere = incomeEntries.filter(e => e.recurringIncomeId);
+  const err = sel.length ? validateIncomeLink(r.id, sel, incomeEntries) : "";
+  const chosen = cands.filter(e => sel.includes(e.id));
+  const toggle = (id) => setSel(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  return (
+    <div style={{ background: COLORS.paper, borderRadius: 12, padding: 12, marginTop: 8 }}>
+      <div style={{ fontWeight: 700, fontSize: 13 }}>קישור הכנסות קיימות אל "{r.name}"</div>
+      <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, margin: "4px 0 8px" }}>
+        הקישור משנה רק את שיוך הרשומה (recurringIncomeId), בלי לשנות סכום, שם, תאריך או חודש. רשומה מקושרת מחליפה את ההכנסה הקבועה בחודש שלה. אפשר לבחור גם רשומות בשמות שונים. שום דבר לא מקושר אוטומטית.
+      </div>
+      {cands.length === 0 && <div style={{ fontSize: 12.5, color: COLORS.sub }}>אין הכנסות ידניות לא מקושרות</div>}
+      <div style={{ maxHeight: 260, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+        {cands.map(e => {
+          const applies = !!recurringIncomeForMonth(r, e.monthKey);
+          return (
+            <label key={e.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#fff", borderRadius: 10, padding: "8px 10px", minHeight: 44, cursor: "pointer", border: `1.5px solid ${sel.includes(e.id) ? COLORS.sage : COLORS.mist}` }}>
+              <input type="checkbox" checked={sel.includes(e.id)} onChange={() => toggle(e.id)} style={{ width: 20, height: 20, marginTop: 2, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, fontSize: 13, overflowWrap: "anywhere" }}>
+                <b>{monthLabelOf(e.monthKey)}</b> · {e.source} · {fmt(e.amount)}
+                {applies && <span style={{ display: "block", fontSize: 11.5, color: "#8a6400" }}>⚠️ ייתכן כפל: ההכנסה הקבועה חלה גם בחודש הזה. אחרי הקישור הרשומה תחליף אותה ולא תיספר פעמיים</span>}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      {linkedElsewhere.length > 0 && <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6 }}>{linkedElsewhere.length} רשומות כבר מקושרות ואינן מוצגות כאן</div>}
+      {chosen.length > 0 && !err && (
+        <div style={{ fontSize: 12.5, background: COLORS.sageLight, borderRadius: 10, padding: "8px 10px", marginTop: 8, lineHeight: 1.6 }}>
+          תצוגה מקדימה: יקושרו {chosen.length} רשומות ל"{r.name}":
+          {chosen.map(e => <div key={e.id}>• {monthLabelOf(e.monthKey)} · {fmt(e.amount)} (במקום הסכום הקבוע של החודש הזה)</div>)}
+        </div>
+      )}
+      {err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12.5, fontWeight: 600, marginTop: 8 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button onClick={onClose} style={{ flex: 1, minHeight: 42, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>סגירה</button>
+        <button disabled={!chosen.length || !!err} onClick={() => { onConfirm(r.id, sel); onClose(); }}
+          style={{ flex: 1, minHeight: 42, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13.5, cursor: "pointer", opacity: (!chosen.length || err) ? 0.5 : 1 }}>
+          אישור קישור {chosen.length ? `(${chosen.length})` : ""}
+        </button>
+      </div>
+    </div>
+  );
+}
+function RecurringIncomesPanel({ recurringIncomes, incomeEntries, onSave, onLink }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState(null); // null | "new" | {edit: id} | {link: id}
+  const del = (r) => {
+    const linked = incomeEntries.filter(e => e.recurringIncomeId === r.id).length;
+    const msg = `למחוק את ההכנסה הקבועה "${r.name}"?\n\nהיא תיעלם מהתחזית בכל החודשים.${linked ? `\n${linked} רשומות ידניות מקושרות אליה לא יימחקו וימשיכו להיספר כהכנסות רגילות בחודשים שלהן.` : ""}`;
+    if (window.confirm(msg)) onSave(recurringIncomes.filter(x => x.id !== r.id));
+  };
+  return (
+    <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
+        <span>💰 הכנסות קבועות ({recurringIncomes.length})</span><span style={{ color: COLORS.sub, fontSize: 12 }}>{open ? "סגירה ▴" : "פתיחה ▾"}</span>
+      </button>
+      {open && (
+        <div style={{ paddingBottom: 12 }}>
+          <div style={{ fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5, marginBottom: 8 }}>הכנסה קבועה ממלאת את התחזית בכל חודש רלוונטי. כדי לשנות חודש מסוים אפשר ללחוץ "שנה לחודש זה" בתוך החודש בתחזית.</div>
+          {recurringIncomes.map(r => {
+            const dupes = incomeEntries.filter(e => !e.recurringIncomeId && recurringIncomeForMonth(r, e.monthKey)).length;
+            return (
+              <div key={r.id} style={{ borderTop: `1px solid ${COLORS.mist}`, padding: "10px 0" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, overflowWrap: "anywhere" }}>{r.name} · {fmt(r.amount)}</div>
+                <div style={{ fontSize: 12, color: COLORS.sub, lineHeight: 1.5 }}>
+                  יום {r.day} בחודש · מ־{monthLabelOf(r.startMonth)}{r.endMonth ? ` עד ${monthLabelOf(r.endMonth)}` : " ללא סיום"}
+                  {!isEmptyVal(r.bonusAmount) && <div>בונוס: {fmt(r.bonusAmount)} כל {r.bonusEveryMonths} חודשים, החל מ־{monthLabelOf(r.bonusAnchorMonth)} (מחליף את הסכום הרגיל)</div>}
+                </div>
+                {dupes > 0 && <div style={{ fontSize: 11.5, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "5px 8px", marginTop: 6 }}>⚠️ יש {dupes} הכנסות ידניות לא מקושרות בחודשים שההכנסה הזו חלה בהם. ייתכן כפל; אפשר לקשר אותן ידנית.</div>}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                  {[["עריכה", () => setMode({ edit: r.id })], ["קישור רשומות", () => setMode({ link: r.id })], ["מחיקה", () => del(r)]].map(([t, fn]) => (
+                    <button key={t} onClick={fn} style={{ minHeight: 40, padding: "0 12px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", color: t === "מחיקה" ? COLORS.coral : COLORS.ink, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{t}</button>
+                  ))}
+                </div>
+                {mode && mode.edit === r.id && <RecurringIncomeForm initial={r} onCancel={() => setMode(null)} onSubmit={(out) => { onSave(recurringIncomes.map(x => x.id === r.id ? out : x)); setMode(null); }} />}
+                {mode && mode.link === r.id && <IncomeLinkDialog r={r} incomeEntries={incomeEntries} recurringIncomes={recurringIncomes} onConfirm={onLink} onClose={() => setMode(null)} />}
+              </div>
+            );
+          })}
+          {mode === "new"
+            ? <RecurringIncomeForm onCancel={() => setMode(null)} onSubmit={(out) => { onSave([...recurringIncomes, out]); setMode(null); }} />
+            : <button onClick={() => setMode("new")} style={{ width: "100%", minHeight: 44, borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer", marginTop: 6 }}>＋ הוספת הכנסה קבועה</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards, recurringIncomes, onSaveRecurring, onAddOverride, onLinkEntries }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
   const [dayDraft, setDayDraft] = useState("1");
   const [expandedMonth, setExpandedMonth] = useState(null);
   const [cardsOpen, setCardsOpen] = useState(false);
+  const [ovr, setOvr] = useState(null); // { key, rid, amount, day, err }
   const [newCardName, setNewCardName] = useState("");
 
   const months = useMemo(() => {
@@ -1183,7 +1399,9 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   let runPartial = false;
   const rows = months.map((m) => {
     const entries = incomeEntries.filter(e => e.monthKey === m.key);
-    const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0);
+    const recInfo = recurringIncomeItemsForMonth(recurringIncomes, incomeEntries, m.key);
+    const recurringTotal = recInfo.items.reduce((s, x) => s + x.amount, 0);
+    const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0) + recurringTotal;
     const { direct: directFixed, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
     const directFixedTotal = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const creditFixedTotal = creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
@@ -1210,7 +1428,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
     // build day-by-day timeline
     const events = [];
-    entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}`, amount: Number(e.amount) || 0 }));
+    entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}${e.recurringIncomeId ? " · עוקף קבועה" : ""}`, amount: Number(e.amount) || 0 }));
+    recInfo.items.forEach(x => events.push({ day: x.day, label: `💰 ${x.r.name} · קבועה${x.bonus ? " · בונוס" : ""}`, amount: x.amount }));
     directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
     if (globalCredit > 0) {
@@ -1229,7 +1448,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
       return { ...ev, after: bal };
     });
 
-    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay, globalCredit, cardLines, cardTotal, unscheduled, partial, runPartial };
+    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, runPartial };
   });
 
   const addIncomeHere = (mKey) => {
@@ -1263,6 +1482,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         <input type="number" min="1" max="31" defaultValue={creditBillingDay} onBlur={(e) => onSetCreditBillingDay(Number(e.target.value) || 1)}
           style={{ width: 70, padding: "7px 10px", borderRadius: 9, border: `1.5px solid ${COLORS.mist}`, fontSize: 13.5, textAlign: "center", fontWeight: 700 }} />
       </div>
+
+      <RecurringIncomesPanel recurringIncomes={recurringIncomes} incomeEntries={incomeEntries} onSave={onSaveRecurring} onLink={onLinkEntries} />
 
       {rows.some(r => r.partial) && (
         <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12, lineHeight: 1.5 }}>
@@ -1330,6 +1551,45 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
             </div>
           </div>
           <Row label="הכנסות" value={fmt(r.income)} />
+          {(r.recInfo.items.length > 0 || r.recInfo.overridden.length > 0) && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "2px 0 6px" }}>
+              {r.recInfo.items.map(x => (
+                <div key={x.r.id} style={{ background: COLORS.sageLight, borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                    <span style={{ overflowWrap: "anywhere", minWidth: 0 }}><b style={{ color: COLORS.sage }}>קבועה</b>{x.bonus ? " · בונוס" : ""} · {x.r.name} (יום {x.day})</span>
+                    <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{fmt(x.amount)}</span>
+                  </div>
+                  {ovr && ovr.key === r.key && ovr.rid === x.r.id ? (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <div><label style={labelStyle}>סכום לחודש זה (₪, 0 = דילוג)</label>
+                          <input aria-label="סכום לחודש זה" type="number" inputMode="decimal" min="0" value={ovr.amount} onChange={e => setOvr({ ...ovr, amount: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
+                        <div><label style={labelStyle}>יום (לא חובה)</label>
+                          <input aria-label="יום בחודש" type="number" inputMode="numeric" min="1" max="31" placeholder={String(x.day)} value={ovr.day} onChange={e => setOvr({ ...ovr, day: e.target.value, err: "" })} style={{ ...inputStyle, height: 40, fontSize: 16 }} /></div>
+                      </div>
+                      {ovr.err && <div role="alert" style={{ color: COLORS.coral, fontSize: 12, fontWeight: 600, marginTop: 6 }}>{ovr.err}</div>}
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button onClick={() => setOvr(null)} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>ביטול</button>
+                        <button onClick={() => {
+                          const d = ovr.day === "" ? null : Number(ovr.day);
+                          const e = validateIncomeOverride(x.r.id, r.key, ovr.amount, incomeEntries) || (d !== null && (!Number.isInteger(d) || d < 1 || d > 31) ? "היום חייב להיות בין 1 ל־31" : "");
+                          if (e) return setOvr({ ...ovr, err: e });
+                          onAddOverride(x.r.id, r.key, Number(ovr.amount), d); setOvr(null);
+                        }} style={{ flex: 1, minHeight: 40, borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>שמירה לחודש זה בלבד</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => setOvr({ key: r.key, rid: x.r.id, amount: "", day: "", err: "" })} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 12, fontWeight: 700, textDecoration: "underline", cursor: "pointer", minHeight: 32, padding: 0, marginTop: 2 }}>שנה לחודש זה</button>
+                  )}
+                </div>
+              ))}
+              {r.recInfo.overridden.map(o => (
+                <div key={o.r.id} style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 8, padding: "6px 8px", fontSize: 12 }}>
+                  <b>עוקף קבועה</b> · {o.r.name}: {fmt(o.entry.amount)} במקום {fmt(o.calc.amount)}{o.calc.bonus ? " (בונוס)" : ""}
+                </div>
+              ))}
+            </div>
+          )}
           <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
             <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
@@ -1393,7 +1653,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
             <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
               {r.entries.map(e => (
                 <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: COLORS.sub, background: COLORS.paper, borderRadius: 8, padding: "5px 8px" }}>
-                  <span>{e.source} (יום {e.day || 1})</span>
+                  <span>{e.source} (יום {e.day || 1}){e.recurringIncomeId ? <b style={{ color: "#8a6400" }}> · {(recurringIncomes || []).some(x => x.id === e.recurringIncomeId) ? "עוקף קבועה" : "הייתה מקושרת לקבועה שנמחקה"}</b> : null}</span>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>{fmt(e.amount)}
                     <button onClick={() => onRemoveIncome(e.id)} style={{ border: "none", background: "none", color: COLORS.coral, cursor: "pointer", fontSize: 12 }}>✕</button>
                   </span>
