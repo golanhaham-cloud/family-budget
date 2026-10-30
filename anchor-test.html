@@ -501,7 +501,7 @@ function BudgetApp() {
   const [data, setData] = useState(EMPTY_DATA);
   const [user, setUser] = useState(null);
   const [nameDraft, setNameDraft] = useState("");
-  const [monthDate, setMonthDate] = useState(new Date());
+  const [monthDate, setMonthDate] = useState(() => { const m = /[#&]today=(\d{4})-(\d{2})-(\d{2})/.exec(window.location.hash || ""); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12) : new Date(); });
   const [tab, setTab] = useState("dashboard");
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editExpense, setEditExpense] = useState(null);
@@ -1412,33 +1412,34 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const [newCardName, setNewCardName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const months = useMemo(() => {
-    const arr = [];
-    for (let i = 0; i <= 6; i++) {
-      const d = new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
-      arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}`, offset: i });
-    }
-    return arr;
-  }, [monthDate]);
-
-  // עוגן יתרה עם תאריך: כשהוגדר תאריך ליתרת הפתיחה, החישוב מתחיל מהתאריך הזה
-  // וכולל רק תנועות מאותו יום והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
-  const currentMonthKey = monthKey(monthDate);
+  // עוגן יתרה עם תאריך: היתרה מתייחסת לתחילת היום שנבחר (לפני התנועות של אותו יום),
+  // והחישוב סופר רק תנועות מהתאריך הזה והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
+  // כשהעוגן בחודש קודם התחזית מתחילה מאותו חודש, כדי שהתנועות שבין העוגן להיום לא יפלטו.
+  const realNowKey = monthKey(new Date());
+  const viewedKey = monthKey(monthDate);
   const anchorInfo = useMemo(() => {
     if (!openingBalanceDate) return null;
     const parts = String(openingBalanceDate).split("-").map(Number);
     if (parts.length !== 3 || parts.some((x) => !Number.isFinite(x))) return null;
     const [y, mo, da] = parts;
     if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
-    let key = `${y}-${String(mo).padStart(2, "0")}`;
-    let day = da;
-    let past = false;
-    if (key < currentMonthKey) { key = currentMonthKey; day = 1; past = true; }
-    return { key, day, past, dateLabel: `${String(da).padStart(2, "0")}.${String(mo).padStart(2, "0")}.${y}` };
-  }, [openingBalanceDate, currentMonthKey]);
+    const key = `${y}-${String(mo).padStart(2, "0")}`;
+    return { key, day: da, past: key < realNowKey, unsupported: monthsDiff(key, realNowKey) > 3,
+             dateLabel: `${String(da).padStart(2, "0")}.${String(mo).padStart(2, "0")}.${y}` };
+  }, [openingBalanceDate, realNowKey]);
+
+  const months = useMemo(() => {
+    const arr = [];
+    const start = anchorInfo && !anchorInfo.unsupported && anchorInfo.key < viewedKey ? -monthsDiff(anchorInfo.key, viewedKey) : 0;
+    for (let i = start; i <= 6; i++) {
+      const d = new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
+      arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}`, offset: i });
+    }
+    return arr;
+  }, [monthDate, anchorInfo, viewedKey]);
 
   const rowsRaw = months.map((m) => {
-    const isAnchorMonth = !!(anchorInfo && m.key === anchorInfo.key);
+    const isAnchorMonth = !!(anchorInfo && !anchorInfo.unsupported && m.key === anchorInfo.key);
     const fromDay = isAnchorMonth ? anchorInfo.day : 1;
     const inRange = (d) => (Number(d) || 1) >= fromDay;
     const entries = incomeEntries.filter(e => e.monthKey === m.key && inRange(e.day));
@@ -1481,7 +1482,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     cardLines.forEach(cl => events.push({ day: cl.day, label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
-    const keep = anchorInfo ? m.key >= anchorInfo.key : m.offset >= 1;
+    const keep = !anchorInfo ? m.offset >= 1 : (anchorInfo.unsupported ? false : m.key >= anchorInfo.key);
     return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
   }).filter(r => r.keep);
 
@@ -1515,12 +1516,17 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         כל חודש מציג בראש את היתרה הצפויה בסופו. לחיצה על חודש פותחת את הפירוט המלא, כולל סדר הכניסות וההוצאות היומי והנקודה הנמוכה בחודש
       </div>
 
-      {anchorInfo && anchorInfo.past && (
-        <div role="note" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
-          ℹ️ תאריך היתרה לפני החודש הנוכחי, ולכן החישוב מתחיל בתחילת {monthLabelOf(currentMonthKey)}.
+      {anchorInfo && anchorInfo.unsupported && (
+        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ⚠️ תאריך היתרה ישן מדי לחישוב אמין (יותר מ־3 חודשים אחורה), והתחזית לא מוצגת. עדכנו יתרה ותאריך עדכניים, או נקו את שדה התאריך כדי לחזור לחישוב הרגיל.
         </div>
       )}
-      {rows.length === 0 && (
+      {anchorInfo && !anchorInfo.unsupported && anchorInfo.past && (
+        <div role="note" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ℹ️ תאריך היתרה לפני החודש הנוכחי. התנועות שבין התאריך להיום מחושבות רק מנתוני התכנון באפליקציה (הכנסות והוצאות מתוכננות), בלי תנועות בנק בפועל. אם היו תנועות נוספות, עדכנו יתרה ותאריך עדכניים.
+        </div>
+      )}
+      {anchorInfo && !anchorInfo.unsupported && rows.length === 0 && (
         <div role="note" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
           ℹ️ תאריך היתרה שנבחר מאוחר מתקופת התחזית. בחרו תאריך מוקדם יותר או נקו את שדה התאריך.
         </div>
@@ -1567,7 +1573,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               </div>
               <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>
                 {openingBalanceDate
-                  ? "התחזית מתחילה מהיתרה בתאריך שנבחר וסופרת רק תנועות מאותו יום והלאה. תנועות מוקדמות יותר כבר משוקפות ביתרה ולא ייספרו פעמיים."
+                  ? "היתרה מתייחסת לתחילת היום שנבחר, לפני התנועות של אותו יום. התחזית סופרת רק תנועות מהתאריך והלאה (כולל אותו יום), ותנועות קודמות לא נספרות פעמיים. אם היתרה בבנק כבר כוללת את תנועות היום, בחרו את התאריך של מחר."
                   : "ללא תאריך, היתרה נחשבת יתרת פתיחה של חודש התחזית הראשון (החודש הבא)."}
               </div>
             </div>
@@ -1640,7 +1646,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
             <div style={{ minWidth: 0 }}>
               <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}{r.isAnchorMonth && anchorInfo ? ` · מ־${anchorInfo.day} בחודש` : ""}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                {r.isAnchorMonth && anchorInfo && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "2px 6px" }}>יתרה מ־{anchorInfo.dateLabel}</span>}
+                {r.isAnchorMonth && anchorInfo && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "2px 6px" }}>יתרה מתחילת {anchorInfo.dateLabel}</span>}
                 {r.runPartial && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6400", background: COLORS.amberLight, borderRadius: 6, padding: "2px 6px" }}>חלקי</span>}
                 {r.minBal < r.openingForMonth && r.minBal < 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
               </div>
@@ -1723,8 +1729,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               </div>
 
               <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
-                <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>{r.isAnchorMonth && anchorInfo ? `יתרה נכון ל־${anchorInfo.dateLabel}: ${fmt(r.openingForMonth)}` : `יתרת פתיחה לחודש: ${fmt(r.openingForMonth)}`}</div>
-                {r.isAnchorMonth && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>מוצגות רק תנועות מה־{r.fromDay} בחודש והלאה. תנועות מוקדמות יותר כבר משוקפות ביתרה ואינן נספרות שוב.</div>}
+                <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>{r.isAnchorMonth && anchorInfo ? `יתרה בתחילת ${anchorInfo.dateLabel}: ${fmt(r.openingForMonth)}` : `יתרת פתיחה לחודש: ${fmt(r.openingForMonth)}`}</div>
+                {r.isAnchorMonth && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>מוצגות תנועות מה־{r.fromDay} בחודש והלאה (כולל אותו יום). תנועות מוקדמות יותר משוקפות ביתרה ואינן נספרות שוב.</div>}
                 {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
                 {r.timeline.map((ev, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: i === r.timeline.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
