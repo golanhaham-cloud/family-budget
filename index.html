@@ -746,7 +746,8 @@ function BudgetApp() {
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget}
-            cashInfo={cashBudgetForMonth(data.settings.cashBudgets || {}, mKey)} onSetCashBudget={(v) => setCashBudget(mKey, v)} />
+            cashInfo={cashBudgetForMonth(data.settings.cashBudgets || {}, mKey)} onSetCashBudget={(v) => setCashBudget(mKey, v)}
+            effectiveTotalBudget={budgetTotalForMonth(data.budgets, activeCategories, mKey)} />
         )}
         {tab === "advice" && <AdviceTab key={mKey} monthDate={monthDate} perCategory={perCategory} totalBudget={totalBudget} totalSpent={totalSpent}
           fixedExpenses={activeFixed.filter(f => isFixedInPeriod(f, mKey))} advices={data.settings.advices || []} legacyAdvice={data.settings.lastAdvice} onSaved={saveAdvice} />}
@@ -1985,9 +1986,11 @@ function AdviceTab({ monthDate, perCategory, totalBudget, totalSpent, fixedExpen
   );
 }
 
-function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashInfo, onSetCashBudget }) {
+function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashInfo, onSetCashBudget, effectiveTotalBudget }) {
   const cashExplicit = cashInfo && cashInfo.explicit ? cashInfo.value : null;
   const cashEffective = cashInfo ? cashInfo.value : 0;
+  // התקרה והתצוגה של החלוקה הן מול התקציב בפועל של החודש (כולל ירושה), כמו בתחזית - לא מול הרשומה הגולמית שיכולה להיות ריקה בחודש יורש.
+  const cashCapTotal = Math.max(Number(effectiveTotalBudget) || 0, 0);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newIcon, setNewIcon] = useState("📦");
@@ -2033,7 +2036,7 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
               if (raw === "") { onSetCashBudget(null); return; }
               let v = Number(raw);
               if (!Number.isFinite(v) || v < 0) v = 0;
-              if (v > totalBudget) v = totalBudget;
+              if (v > cashCapTotal) v = cashCapTotal;
               e.target.value = String(v);
               onSetCashBudget(v);
             }}
@@ -2041,8 +2044,8 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
           <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
         </div>
         <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 8, lineHeight: 1.6 }}>
-          {Math.min(cashEffective, totalBudget) > 0
-            ? <span>אשראי (יורד בחיוב האשראי): <b>{fmt(totalBudget - Math.min(cashEffective, totalBudget))}</b> · מזומן/ביט: <b>{fmt(Math.min(cashEffective, totalBudget))}</b></span>
+          {Math.min(cashEffective, cashCapTotal) > 0
+            ? <span>אשראי (יורד בחיוב האשראי): <b>{fmt(cashCapTotal - Math.min(cashEffective, cashCapTotal))}</b> · מזומן/ביט: <b>{fmt(Math.min(cashEffective, cashCapTotal))}</b></span>
             : "כרגע כל התקציב מחושב כאשראי (יורד בחיוב האשראי)."}
           {cashExplicit === null && cashInfo && cashInfo.sourceKey && cashEffective > 0 && (
             <span><br />החלוקה עוברה אוטומטית מ{monthLabelOf(cashInfo.sourceKey)}. שינוי או איפוס כאן יחולו על החודש המוצג בלבד.</span>
