@@ -117,7 +117,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
-const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
+const JSONBIN_ID = "6ae45061ac6210605a5e39b1"; // TEMP FIXTURE - revert before final // מאגר קבוע - משותף לשני המשתמשים
 const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, cashBudgets: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
@@ -1520,6 +1520,11 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     });
     bal -= cashPerDay * (r.dimDays - prevDay);
     if (bal < minBal) { minBal = bal; minDay = r.dimDays; }
+    // שורת סגירה: כשהפיזור היומי של המזומן ממשיך אחרי האירוע המתוארך האחרון, מציגים את ההשלמה כדי שהתזרים יסתדר עם יתרת סוף החודש
+    const cashTail = cashPerDay * (r.dimDays - prevDay);
+    if (cashTail > 0.004) {
+      timeline.push({ day: r.dimDays, label: `🏁 סוף חודש · יתרה משוערת אחרי פיזור מזומן/ביט (השלמת ${fmt(cashTail)})`, amount: -cashTail, after: bal, closing: true });
+    }
     running += r.balance;
     return { ...r, openingForMonth, running, timeline, minBal, minDay, runPartial };
   });
@@ -1781,7 +1786,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
                 {r.timeline.map((ev, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: i === r.timeline.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
                     <span style={{ color: COLORS.sub, width: 28 }}>{ev.day}</span>
-                    <span style={{ flex: 1 }}>{ev.label}</span>
+                    <span style={{ flex: 1, fontStyle: ev.closing ? "italic" : "normal", color: ev.closing ? COLORS.sub : "inherit" }}>{ev.label}</span>
                     <span style={{ fontWeight: 600, color: ev.amount >= 0 ? COLORS.sage : COLORS.coral, marginLeft: 8 }}>{ev.amount >= 0 ? "+" : ""}{fmt(ev.amount)}</span>
                     <span style={{ width: 90, textAlign: "left", fontSize: 11, color: ev.after < 0 ? COLORS.coral : COLORS.sub, fontWeight: ev.after < 0 ? 700 : 400 }}>{fmt(ev.after)}</span>
                   </div>
