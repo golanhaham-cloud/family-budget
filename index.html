@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "24";
+const APP_VERSION = "25";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -131,10 +131,21 @@ function normalizeData(d) {
     settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, cashBudgets: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
 }
-function budgetTotalForMonth(budgets, categories, mKey, fallback) {
-  const monthB = budgets[mKey];
-  if (!monthB) return fallback;
-  return categories.reduce((s, c) => s + (Number(monthB[c.id]) || 0), 0);
+function budgetTotalForMonth(budgets, categories, mKey) {
+  const sumFor = (k) => categories.reduce((s, c) => s + (Number((budgets[k] || {})[c.id]) || 0), 0);
+  // רשומה "מוגדרת" היא רשומה עם ערכים בפועל: אובייקט ריק ({}) אינו תקציב שהוגדר ומדלגים עליו,
+  // אבל רשומה עם ערכים שהסכום שלהם 0 היא תקציב אפס מכוון ונכבדת כפי שהיא.
+  const defined = (k) => { const r = budgets[k]; return !!r && Object.keys(r).length > 0; };
+  if (defined(mKey)) return sumFor(mKey);
+  // חודש ללא תקציב מוגדר יורש את התקציב האחרון שהוגדר לפניו, ולא את תקציב החודש הנצפה,
+  // כדי שהתחזית לא תשתנה ממעבר בין חודשים במסך. לא יורשים אחורה מחודש עתידי.
+  const [y0, m0] = mKey.split("-").map(Number);
+  for (let i = 1; i <= 240; i++) {
+    const k = monthKey(new Date(y0, m0 - 1 - i, 1));
+    if (defined(k)) return sumFor(k);
+  }
+  // לא נמצא תקציב מוגדר באף חודש קודם: 0 באופן קבוע, לעולם לא התקציב של החודש הנצפה.
+  return 0;
 }
 function monthsDiff(aKey, bKey) {
   const [ay, am] = aKey.split("-").map(Number);
@@ -1456,12 +1467,12 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
-    const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
+    const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey);
     // חלוקה לפי אמצעי תשלום: החלק ששולם במזומן/ביט ירד מהבנק בחודש ההוצאה עצמו, ולכן מקטין את חיוב האשראי (של חודש המקור). ברירת מחדל: הכול אשראי.
     const cashOf = (k, total) => Math.min(Math.max(Number((cashBudgets || {})[k]) || 0, 0), Math.max(Number(total) || 0, 0));
     const sourceCash = cashOf(sourceMonthKey, autoVariableSpend);
     const autoVariableCredit = autoVariableSpend - sourceCash;
-    const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key, totalBudget));
+    const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key));
     // עוגן מתוארך (תחילת היום, כולל אותו יום): היתרה כבר משקפת תנועות שלפני יום העוגן, ולכן קניות המזומן נספרות
     // רק באופן יחסי מהיום הזה והלאה - כמו שאר התנועות המסוננות לפי fromDay. עוגן ביום 1 = כל החודש נספר.
     const cashAnchorDays = isAnchorMonth ? Math.max(dim - fromDay + 1, 0) : dim;
