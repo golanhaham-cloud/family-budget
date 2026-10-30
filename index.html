@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "25";
+const APP_VERSION = "26";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -146,6 +146,20 @@ function budgetTotalForMonth(budgets, categories, mKey) {
   }
   // לא נמצא תקציב מוגדר באף חודש קודם: 0 באופן קבוע, לעולם לא התקציב של החודש הנצפה.
   return 0;
+}
+// חלוקת מזומן/ביט לחודש: חודש ללא חלוקה מוגדרת יורש את החלוקה האחרונה שהוגדרה לפניו,
+// כפי שהתקציב הכולל יורש. ערך 0 מפורש נכבד כפי שהוא (הכול אשראי באותו חודש) וחוסם את הירושה.
+// מחזיר { value, sourceKey, explicit }: sourceKey הוא החודש שממנו נורש הערך, explicit כשהוגדר לחודש עצמו.
+function cashBudgetForMonth(cashBudgets, mKey) {
+  const cb = cashBudgets || {};
+  const def = (k) => Object.prototype.hasOwnProperty.call(cb, k) && Number.isFinite(Number(cb[k])) && Number(cb[k]) >= 0;
+  if (def(mKey)) return { value: Number(cb[mKey]), sourceKey: null, explicit: true };
+  const [y0, m0] = mKey.split("-").map(Number);
+  for (let i = 1; i <= 240; i++) {
+    const k = monthKey(new Date(y0, m0 - 1 - i, 1));
+    if (def(k)) return { value: Number(cb[k]), sourceKey: k, explicit: false };
+  }
+  return { value: 0, sourceKey: null, explicit: false };
 }
 function monthsDiff(aKey, bKey) {
   const [ay, am] = aKey.split("-").map(Number);
@@ -621,10 +635,11 @@ function BudgetApp() {
     else next[mKey] = merged;
     await persist({ ...data, settings: { ...data.settings, variableOverrideMeta: next } });
   };
-  // חלוקת התקציב המשתנה לפי אמצעי תשלום: הסכום ששולם במזומן/ביט יורד מהבנק באותו חודש, והשאר בחיוב האשראי. 0/ריק = הכול אשראי (כמו קודם).
+  // חלוקת התקציב המשתנה לפי אמצעי תשלום: הסכום ששולם במזומן/ביט יורד מהבנק באותו חודש, והשאר בחיוב האשראי.
+  // ריק מוחק את החלוקה של החודש (והוא יורש את החלוקה האחרונה שהוגדרה לפניו); 0 מפורש = הכול אשראי באותו חודש וחוסם את הירושה.
   const setCashBudget = async (mKey, val) => {
     const next = { ...(data.settings.cashBudgets || {}) };
-    if (val === null || val === undefined || !(Number(val) > 0)) delete next[mKey];
+    if (val === null || val === undefined || !(Number(val) >= 0)) delete next[mKey];
     else next[mKey] = Number(val);
     await persist({ ...data, settings: { ...data.settings, cashBudgets: next } });
   };
@@ -731,7 +746,7 @@ function BudgetApp() {
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget}
-            cashBudget={Number((data.settings.cashBudgets || {})[mKey]) || 0} onSetCashBudget={(v) => setCashBudget(mKey, v)} />
+            cashInfo={cashBudgetForMonth(data.settings.cashBudgets || {}, mKey)} onSetCashBudget={(v) => setCashBudget(mKey, v)} />
         )}
         {tab === "advice" && <AdviceTab key={mKey} monthDate={monthDate} perCategory={perCategory} totalBudget={totalBudget} totalSpent={totalSpent}
           fixedExpenses={activeFixed.filter(f => isFixedInPeriod(f, mKey))} advices={data.settings.advices || []} legacyAdvice={data.settings.lastAdvice} onSaved={saveAdvice} />}
@@ -1468,8 +1483,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
     const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey);
-    // חלוקה לפי אמצעי תשלום: החלק ששולם במזומן/ביט ירד מהבנק בחודש ההוצאה עצמו, ולכן מקטין את חיוב האשראי (של חודש המקור). ברירת מחדל: הכול אשראי.
-    const cashOf = (k, total) => Math.min(Math.max(Number((cashBudgets || {})[k]) || 0, 0), Math.max(Number(total) || 0, 0));
+    // חלוקה לפי אמצעי תשלום: החלק ששולם במזומן/ביט ירד מהבנק בחודש ההוצאה עצמו, ולכן מקטין את חיוב האשראי (של חודש המקור). חודש ללא חלוקה יורש את האחרונה שהוגדרה; ברירת מחדל: הכול אשראי.
+    const cashOf = (k, total) => Math.min(Math.max(cashBudgetForMonth(cashBudgets, k).value, 0), Math.max(Number(total) || 0, 0));
     const sourceCash = cashOf(sourceMonthKey, autoVariableSpend);
     const autoVariableCredit = autoVariableSpend - sourceCash;
     const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key));
@@ -1970,7 +1985,9 @@ function AdviceTab({ monthDate, perCategory, totalBudget, totalSpent, fixedExpen
   );
 }
 
-function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashBudget, onSetCashBudget }) {
+function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashInfo, onSetCashBudget }) {
+  const cashExplicit = cashInfo && cashInfo.explicit ? cashInfo.value : null;
+  const cashEffective = cashInfo ? cashInfo.value : 0;
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newIcon, setNewIcon] = useState("📦");
@@ -2009,27 +2026,31 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
         <label style={labelStyle}>חלוקת התקציב לפי אמצעי תשלום</label>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>מזומן / ביט מהבנק (יורד באותו חודש):</span>
-          <input key={"cash-" + (cashBudget || 0)} type="number" inputMode="decimal" min="0" placeholder="0" defaultValue={cashBudget || ""}
+          <input key={"cash-" + (cashExplicit !== null ? cashExplicit : "inh" + cashEffective)} type="number" inputMode="decimal" min="0"
+            placeholder={cashExplicit === null && cashEffective > 0 ? String(cashEffective) : "0"} defaultValue={cashExplicit !== null ? cashExplicit : ""}
             onBlur={(e) => {
               const raw = e.target.value.trim();
               if (raw === "") { onSetCashBudget(null); return; }
               let v = Number(raw);
               if (!Number.isFinite(v) || v < 0) v = 0;
               if (v > totalBudget) v = totalBudget;
-              e.target.value = v > 0 ? String(v) : "";
-              onSetCashBudget(v > 0 ? v : null);
+              e.target.value = String(v);
+              onSetCashBudget(v);
             }}
             style={{ width: 90, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
           <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
         </div>
         <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 8, lineHeight: 1.6 }}>
-          {cashBudget > 0
-            ? <span>אשראי (יורד בחיוב האשראי): <b>{fmt(totalBudget - cashBudget)}</b> · מזומן/ביט: <b>{fmt(cashBudget)}</b></span>
+          {Math.min(cashEffective, totalBudget) > 0
+            ? <span>אשראי (יורד בחיוב האשראי): <b>{fmt(totalBudget - Math.min(cashEffective, totalBudget))}</b> · מזומן/ביט: <b>{fmt(Math.min(cashEffective, totalBudget))}</b></span>
             : "כרגע כל התקציב מחושב כאשראי (יורד בחיוב האשראי)."}
+          {cashExplicit === null && cashInfo && cashInfo.sourceKey && cashEffective > 0 && (
+            <span><br />החלוקה עוברה אוטומטית מ{monthLabelOf(cashInfo.sourceKey)}. שינוי או איפוס כאן יחולו על החודש המוצג בלבד.</span>
+          )}
           <br />
           ביט בטעינת אשראי יורד בחיוב האשראי, ולכן נספר בחלק האשראי. הסכום לא יכול לעבור את סך התקציב החודשי.
           <br />
-          החלוקה חלה על החודש המוצג בלבד ואינה עוברת אוטומטית לחודשים הבאים; חודש ללא חלוקה מחושב כאשראי במלואו.
+          חודש ללא חלוקה מוגדרת יורש את החלוקה האחרונה שהוגדרה לפניו. אפשר לשנות לחודש מסוים בלבד, והזנת 0 מחשבת אותו כאשראי במלואו.
         </div>
       </div>
       {!adding ? (
