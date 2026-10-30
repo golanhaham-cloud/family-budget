@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "28";
+const APP_VERSION = "29";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -1632,7 +1632,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     <div>
       <div style={{ margin: "6px 2px 4px", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
       <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
-        כל חודש מציג בראש את היתרה הצפויה בסופו. לחיצה על חודש פותחת את הפירוט המלא, כולל סדר הכניסות וההוצאות היומי והנקודה הנמוכה בחודש
+        טבלה מרוכזת של 6 החודשים: השינוי החודשי והיתרה המשוערת בסוף כל חודש. לחיצה על חודש פותחת את הפירוט היומי המלא, כולל סדר הכניסות וההוצאות והנקודה הנמוכה בחודש
       </div>
 
       {anchorInfo && anchorInfo.unsupported && (
@@ -1651,16 +1651,16 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         </div>
       )}
 
-      {rows.some(r => r.partial) && (
-        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
-          ⚠️ היתרה החזויה חלקית: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בכל חודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.
+      {(rows.some(r => r.partial) || rows.some(r => r.minBal < r.openingForMonth && r.minBal < 0)) && (
+        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.6, display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.some(r => r.partial) && (
+            <div>⚠️ חלק מהיתרות חלקיות: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בפירוט החודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.</div>
+          )}
+          {rows.filter(r => r.minBal < r.openingForMonth && r.minBal < 0).map(r => (
+            <div key={r.key} style={{ color: COLORS.coral }}>⚠️ {r.label}: היתרה צפויה לרדת עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""} — לפני שהיא מתאזנת בסוף החודש</div>
+          ))}
         </div>
       )}
-      {rows.filter(r => r.minBal < r.openingForMonth && r.minBal < 0).map(r => (
-        <div key={r.key} role="alert" style={{ background: COLORS.coralLight, color: COLORS.coral, borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
-          ⚠️ {r.label}: היתרה צפויה לרדת עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""} — לפני שהיא מתאזנת בסוף החודש
-        </div>
-      ))}
 
       <div style={{ background: COLORS.card, borderRadius: 14, padding: "6px 14px", marginBottom: 14 }}>
         <button onClick={() => setSettingsOpen(o => !o)} aria-expanded={settingsOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", minHeight: 44, cursor: "pointer", fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: 0 }}>
@@ -1759,27 +1759,38 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         )}
       </div>
 
+      <div style={{ fontSize: 11, color: COLORS.sub, margin: "0 2px 8px", lineHeight: 1.5 }}>
+        {openingBalanceDate && anchorInfo
+          ? `היתרות משוערות על בסיס יתרת פתיחה ${fmt(openingBalance)} נכון ל־${anchorInfo.dateLabel} ולא אומתו מול הבנק`
+          : `היתרות משוערות בלבד: יתרת הפתיחה (${fmt(openingBalance)}) הוזנה ללא תאריך ולא אומתה מול הבנק. עיגון לתאריך זמין בהגדרות התחזית`}
+      </div>
+      <div style={{ background: COLORS.card, borderRadius: 16, padding: "4px 12px 8px", marginBottom: 14, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 2px", fontSize: 11, fontWeight: 700, color: COLORS.sub, borderBottom: `1px solid ${COLORS.mist}` }}>
+          <span style={{ flex: 1, minWidth: 0 }}>חודש</span>
+          <span style={{ width: 80, textAlign: "left", flexShrink: 0 }}>שינוי חודשי</span>
+          <span style={{ width: 92, textAlign: "left", flexShrink: 0 }}>יתרה משוערת</span>
+          <span style={{ width: 14, flexShrink: 0 }} />
+        </div>
       {rows.map((r) => (
-        <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
-          <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} role="button" aria-expanded={expandedMonth === r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, cursor: "pointer", minHeight: 44 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}{r.isAnchorMonth && anchorInfo ? ` · מ־${anchorInfo.day} בחודש` : ""}</div>
-              <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+        <div key={r.key} style={{ borderBottom: `1px solid ${COLORS.mist}` }}>
+          <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} role="button" aria-expanded={expandedMonth === r.key} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", minHeight: 48, padding: "7px 2px" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 13.5 }}>{r.label}{r.isAnchorMonth && anchorInfo ? ` · מ־${anchorInfo.day} בחודש` : ""}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
                 {r.isAnchorMonth && anchorInfo && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "2px 6px" }}>יתרה מתחילת {anchorInfo.dateLabel}</span>}
-                {r.runPartial && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6400", background: COLORS.amberLight, borderRadius: 6, padding: "2px 6px" }}>חלקי</span>}
                 {r.minBal < r.openingForMonth && r.minBal < 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
               </div>
             </div>
-            <div style={{ textAlign: "left", flexShrink: 0 }}>
-              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 17, color: r.running >= 0 ? COLORS.sage : COLORS.coral, lineHeight: 1.25 }}>{fmt(r.running)}</div>
-              <div style={{ fontSize: 10, fontWeight: 600, color: COLORS.sub }}>יתרה בסוף החודש{r.runPartial ? " (חלקי)" : ""}</div>
-              <div style={{ fontSize: 11.5, fontWeight: 600, color: r.balance >= 0 ? COLORS.sage : COLORS.coral, marginTop: 2 }}>נטו החודש: {r.balance >= 0 ? "+" : ""}{fmt(r.balance)}</div>
+            <div style={{ width: 80, textAlign: "left", flexShrink: 0, fontSize: 12.5, fontWeight: 700, color: r.balance >= 0 ? COLORS.sage : COLORS.coral }}>{r.balance >= 0 ? "+" : ""}{fmt(r.balance)}</div>
+            <div style={{ width: 92, textAlign: "left", flexShrink: 0 }}>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 15, color: r.running >= 0 ? COLORS.sage : COLORS.coral, lineHeight: 1.25 }}>{fmt(r.running)}</div>
+              {r.runPartial && <div style={{ fontSize: 10, fontWeight: 700, color: "#8a6400" }}>חלקי</div>}
             </div>
-            <span style={{ color: COLORS.sub, fontSize: 12, flexShrink: 0 }}>{expandedMonth === r.key ? "▲" : "▼"}</span>
+            <span style={{ width: 14, flexShrink: 0, color: COLORS.sub, fontSize: 12, textAlign: "center" }}>{expandedMonth === r.key ? "▲" : "▼"}</span>
           </div>
 
           {expandedMonth === r.key && (
-            <div style={{ marginTop: 8, borderTop: `1px solid ${COLORS.mist}`, paddingTop: 8 }}>
+            <div style={{ marginTop: 2, borderTop: `1px dashed ${COLORS.mist}`, paddingTop: 8, paddingBottom: 8 }}>
               <Row label="הכנסות" value={fmt(r.income)} />
               {(r.recInfo.items.length > 0 || r.recInfo.overridden.length > 0) && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, margin: "2px 0 6px" }}>
@@ -1873,6 +1884,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
               <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
                 <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>{r.isAnchorMonth && anchorInfo ? `יתרה בתחילת ${anchorInfo.dateLabel}: ${fmt(r.openingForMonth)}` : `יתרת פתיחה לחודש: ${fmt(r.openingForMonth)}`}</div>
+                {r.minBal < r.openingForMonth && <div style={{ fontSize: 11, fontWeight: 600, color: r.minBal < 0 ? COLORS.coral : COLORS.sub, marginBottom: 6 }}>נקודה נמוכה משוערת בחודש: {fmt(r.minBal)} ביום {r.minDay}</div>}
                 {r.cashDirect > 0 && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>קניות מזומן/ביט ({fmt(r.cashDirect)}) מתפרסות שווה בשווה על {r.isAnchorMonth ? `ימי החודש מה־${r.fromDay} ואילך` : "ימות החודש"} לצורך ההערכה היומית; התזמון בפועל משתנה.</div>}
                 {r.isAnchorMonth && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>מוצגות תנועות מה־{r.fromDay} בחודש והלאה (כולל אותו יום). תנועות מוקדמות יותר משוקפות ביתרה ואינן נספרות שוב.</div>}
                 {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
@@ -1924,6 +1936,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
           )}
         </div>
       ))}
+      </div>
     </div>
   );
 }
