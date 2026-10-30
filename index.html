@@ -2027,6 +2027,11 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
       </div>
       <div style={{ background: COLORS.card, borderRadius: 16, padding: "12px 14px", marginBottom: 14 }}>
         <label style={labelStyle}>חלוקת התקציב לפי אמצעי תשלום</label>
+        {cashCapTotal !== totalBudget && (
+          <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 8, lineHeight: 1.5 }}>
+            לחודש זה לא הוגדרו תקציבי קטגוריות; החלוקה מחושבת מול התקציב שנמשך מחודש קודם: <b>{fmt(cashCapTotal)}</b>.
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13 }}>מזומן / ביט מהבנק (יורד באותו חודש):</span>
           <input key={"cash-" + (cashExplicit !== null ? cashExplicit : "inh" + cashEffective)} type="number" inputMode="decimal" min="0"
@@ -2048,7 +2053,7 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
             ? <span>אשראי (יורד בחיוב האשראי): <b>{fmt(cashCapTotal - Math.min(cashEffective, cashCapTotal))}</b> · מזומן/ביט: <b>{fmt(Math.min(cashEffective, cashCapTotal))}</b></span>
             : "כרגע כל התקציב מחושב כאשראי (יורד בחיוב האשראי)."}
           {cashExplicit === null && cashInfo && cashInfo.sourceKey && cashEffective > 0 && (
-            <span><br />החלוקה עוברה אוטומטית מ{monthLabelOf(cashInfo.sourceKey)}. שינוי או איפוס כאן יחולו על החודש המוצג בלבד.</span>
+            <span><br />החלוקה נמשכת אוטומטית מ{monthLabelOf(cashInfo.sourceKey)}. שינוי או איפוס כאן יחולו על החודש המוצג בלבד.</span>
           )}
           <br />
           ביט בטעינת אשראי יורד בחיוב האשראי, ולכן נספר בחלק האשראי. הסכום לא יכול לעבור את סך התקציב החודשי.
