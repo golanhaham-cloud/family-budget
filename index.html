@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "26";
+const APP_VERSION = "27";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -131,21 +131,25 @@ function normalizeData(d) {
     settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, cashBudgets: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
 }
-function budgetTotalForMonth(budgets, categories, mKey) {
-  const sumFor = (k) => categories.reduce((s, c) => s + (Number((budgets[k] || {})[c.id]) || 0), 0);
-  // רשומה "מוגדרת" היא רשומה עם ערכים בפועל: אובייקט ריק ({}) אינו תקציב שהוגדר ומדלגים עליו,
-  // אבל רשומה עם ערכים שהסכום שלהם 0 היא תקציב אפס מכוון ונכבדת כפי שהיא.
-  const defined = (k) => { const r = budgets[k]; return !!r && Object.keys(r).length > 0; };
-  if (defined(mKey)) return sumFor(mKey);
-  // חודש ללא תקציב מוגדר יורש את התקציב האחרון שהוגדר לפניו, ולא את תקציב החודש הנצפה,
-  // כדי שהתחזית לא תשתנה ממעבר בין חודשים במסך. לא יורשים אחורה מחודש עתידי.
+// החלוקה בפועל לקטגוריות לחודש: חודש ללא רשומה מוגדרת משלו יורש את החלוקה האחרונה שהוגדרה לפניו,
+// ולא את חלוקת החודש הנצפה, כדי שהמסכים לא ישתנו ממעבר בין חודשים. לא יורשים אחורה מחודש עתידי.
+// רשומה "מוגדרת" היא רשומה עם ערכים בפועל: אובייקט ריק ({}) מדלגים עליה, ורשומה עם ערכים שהסכום שלהם 0
+// היא תקציב אפס מכוון ונכבדת כפי שהיא. מחזיר { map, sourceKey, explicit }.
+function budgetsForMonth(budgets, mKey) {
+  const b = budgets || {};
+  const defined = (k) => { const r = b[k]; return !!r && Object.keys(r).length > 0; };
+  if (defined(mKey)) return { map: b[mKey], sourceKey: null, explicit: true };
   const [y0, m0] = mKey.split("-").map(Number);
   for (let i = 1; i <= 240; i++) {
     const k = monthKey(new Date(y0, m0 - 1 - i, 1));
-    if (defined(k)) return sumFor(k);
+    if (defined(k)) return { map: b[k], sourceKey: k, explicit: false };
   }
-  // לא נמצא תקציב מוגדר באף חודש קודם: 0 באופן קבוע, לעולם לא התקציב של החודש הנצפה.
-  return 0;
+  // לא נמצא תקציב מוגדר באף חודש קודם: רשומה ריקה באופן קבוע, לעולם לא החלוקה של החודש הנצפה.
+  return { map: {}, sourceKey: null, explicit: false };
+}
+function budgetTotalForMonth(budgets, categories, mKey) {
+  const { map } = budgetsForMonth(budgets, mKey);
+  return categories.reduce((s, c) => s + (Number(map[c.id]) || 0), 0);
 }
 // חלוקת מזומן/ביט לחודש: חודש ללא חלוקה מוגדרת יורש את החלוקה האחרונה שהוגדרה לפניו,
 // כפי שהתקציב הכולל יורש. ערך 0 מפורש נכבד כפי שהוא (הכול אשראי באותו חודש) וחוסם את הירושה.
@@ -525,9 +529,13 @@ function BudgetApp() {
   const mKey = monthKey(monthDate);
   const activeCategories = useMemo(() => data.categories.filter(c => c.active !== false), [data.categories]);
   const monthBudgets = data.budgets[mKey] || {};
+  // החלוקה בפועל לחודש (כולל ירושה מחודש קודם, כמו בתחזית): הדשבורד, ההתראות, הייעוץ ומסך התקציב עובדים מולה.
+  const budgetInfo = useMemo(() => budgetsForMonth(data.budgets, mKey), [data.budgets, mKey]);
+  const effectiveBudgets = budgetInfo.map;
+  const budgetSourceLabel = !budgetInfo.explicit && budgetInfo.sourceKey ? monthLabelOf(budgetInfo.sourceKey) : null;
   const monthExpenses = useMemo(() => data.expenses.filter(e => e.date && e.date.startsWith(mKey)), [data.expenses, mKey]);
 
-  const totalBudget = activeCategories.reduce((s, c) => s + (Number(monthBudgets[c.id]) || 0), 0);
+  const totalBudget = activeCategories.reduce((s, c) => s + (Number(effectiveBudgets[c.id]) || 0), 0);
   const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   const remaining = totalBudget - totalSpent;
   const overallPct = pct(totalSpent, totalBudget);
@@ -546,10 +554,10 @@ function BudgetApp() {
   const paceHigh = totalBudget > 0 && overallPct - timePct > 12 && isCurrentMonth;
 
   const perCategory = useMemo(() => activeCategories.map(c => {
-    const budget = Number(monthBudgets[c.id]) || 0;
+    const budget = Number(effectiveBudgets[c.id]) || 0;
     const spent = monthExpenses.filter(e => e.categoryId === c.id).reduce((s, e) => s + Number(e.amount || 0), 0);
     return { ...c, budget, spent, percent: pct(spent, budget), remaining: budget - spent };
-  }), [activeCategories, monthBudgets, monthExpenses]);
+  }), [activeCategories, effectiveBudgets, monthExpenses]);
 
   const alerts = useMemo(() => buildBudgetAlerts(perCategory, paceHigh, projected), [perCategory, paceHigh, projected]);
 
@@ -563,7 +571,9 @@ function BudgetApp() {
     showToast("התקציב הועתק מהחודש הקודם");
   };
   const setCategoryBudget = async (catId, amount) => {
-    await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...(data.budgets[mKey] || {}), [catId]: amount } } });
+    // עריכה ראשונה בחודש יורש: מממשים את החלוקה שנמשכה כבסיס, כדי ששינוי קטגוריה אחת לא יאפס את האחרות.
+    const base = budgetInfo.explicit ? (data.budgets[mKey] || {}) : effectiveBudgets;
+    await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...base, [catId]: amount } } });
   };
   const addCategory = async (name, icon) => { await persist({ ...data, categories: [...data.categories, { id: uid(), name, icon, active: true }] }); };
   const updateCategory = async (id, patch) => { await persist({ ...data, categories: data.categories.map(c => c.id === id ? { ...c, ...patch } : c) }); };
@@ -720,7 +730,7 @@ function BudgetApp() {
 
       <div style={{ padding: "10px 16px 0" }}>
         {tab === "dashboard" && (
-          <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct}
+          <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct} budgetSourceLabel={budgetSourceLabel}
             daysLeft={daysLeft} isCurrentMonth={isCurrentMonth} projected={projected} paceHigh={paceHigh}
             perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={activeCategories} dim={dim}
             onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} />
@@ -744,7 +754,7 @@ function BudgetApp() {
             cashBudgets={data.settings.cashBudgets || {}} />
         )}
         {tab === "budget" && (
-          <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
+          <BudgetTab key={mKey} categories={data.categories} monthBudgets={monthBudgets} budgetInfo={budgetInfo} onSetBudget={setCategoryBudget}
             onAddCategory={addCategory} onUpdateCategory={updateCategory} onRemoveCategory={removeCategory} onCopyPrev={copyPrevBudget}
             cashInfo={cashBudgetForMonth(data.settings.cashBudgets || {}, mKey)} onSetCashBudget={(v) => setCashBudget(mKey, v)}
             effectiveTotalBudget={budgetTotalForMonth(data.budgets, activeCategories, mKey)} />
@@ -825,7 +835,7 @@ function AlertsSummary({ alerts }) {
   );
 }
 
-function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense }) {
+function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, budgetSourceLabel }) {
   const gaugeColor = statusColor(overallPct);
   const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
   const barData = perCategory.filter(c => c.budget > 0 || c.spent > 0).map(c => ({ name: c.name, budget: c.budget, spent: c.spent }));
@@ -857,6 +867,9 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
             <Row label="נשאר לתקציב" value={fmt(remaining)} bold color={remaining < 0 ? COLORS.coral : COLORS.sage} />
           </div>
         </div>
+        {budgetSourceLabel && totalBudget > 0 && (
+          <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5 }}>התקציב נמשך אוטומטית מ{budgetSourceLabel}. שינוי ערך במסך התקציב יחול על החודש המוצג בלבד.</div>
+        )}
         {isCurrentMonth && (
           <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${COLORS.mist}`, display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub }}>
             <span>{daysLeft} ימים נותרו החודש</span>
@@ -1986,7 +1999,7 @@ function AdviceTab({ monthDate, perCategory, totalBudget, totalSpent, fixedExpen
   );
 }
 
-function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashInfo, onSetCashBudget, effectiveTotalBudget }) {
+function BudgetTab({ categories, monthBudgets, budgetInfo, onSetBudget, onAddCategory, onUpdateCategory, onRemoveCategory, onCopyPrev, cashInfo, onSetCashBudget, effectiveTotalBudget }) {
   const cashExplicit = cashInfo && cashInfo.explicit ? cashInfo.value : null;
   const cashEffective = cashInfo ? cashInfo.value : 0;
   // התקרה והתצוגה של החלוקה הן מול התקציב בפועל של החודש (כולל ירושה), כמו בתחזית - לא מול הרשומה הגולמית שיכולה להיות ריקה בחודש יורש.
@@ -1996,7 +2009,10 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
   const [newIcon, setNewIcon] = useState("📦");
   const [editingId, setEditingId] = useState(null);
   const active = categories.filter(c => c.active !== false);
-  const totalBudget = active.reduce((s, c) => s + (Number(monthBudgets[c.id]) || 0), 0);
+  const explicit = budgetInfo ? budgetInfo.explicit : true;
+  const effectiveMap = budgetInfo ? budgetInfo.map : monthBudgets;
+  const sourceLabel = !explicit && budgetInfo && budgetInfo.sourceKey ? monthLabelOf(budgetInfo.sourceKey) : null;
+  const totalBudget = active.reduce((s, c) => s + (Number(effectiveMap[c.id]) || 0), 0);
 
   return (
     <div>
@@ -2014,7 +2030,7 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
             ) : (
               <span onClick={() => setEditingId(c.id)} style={{ flex: 1, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>{c.name}</span>
             )}
-            <input type="number" placeholder="0" defaultValue={monthBudgets[c.id] || ""} onBlur={(e) => onSetBudget(c.id, Number(e.target.value) || 0)}
+            <input key={c.id + "-" + (explicit ? "exp" : "inh")} type="number" placeholder={explicit ? "0" : String(Number(effectiveMap[c.id]) || 0)} defaultValue={explicit ? (monthBudgets[c.id] || "") : ""} onBlur={(e) => onSetBudget(c.id, Number(e.target.value) || 0)}
               style={{ width: 82, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
             <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
             <button onClick={() => onRemoveCategory(c.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
@@ -2025,11 +2041,14 @@ function BudgetTab({ categories, monthBudgets, onSetBudget, onAddCategory, onUpd
         <span style={{ color: COLORS.sub }}>סה"כ תקציב חודשי</span>
         <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(totalBudget)}</span>
       </div>
+      {sourceLabel && (
+        <div style={{ fontSize: 11.5, color: COLORS.sub, padding: "0 4px 14px", marginTop: -8, lineHeight: 1.5 }}>החלוקה נמשכת אוטומטית מ{sourceLabel}. שינוי ערך מעתיק את כל החלוקה לחודש זה ומחיל את השינוי עליו בלבד.</div>
+      )}
       <div style={{ background: COLORS.card, borderRadius: 16, padding: "12px 14px", marginBottom: 14 }}>
         <label style={labelStyle}>חלוקת התקציב לפי אמצעי תשלום</label>
-        {cashCapTotal !== totalBudget && (
+        {sourceLabel && (
           <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 8, lineHeight: 1.5 }}>
-            לחודש זה לא הוגדרו תקציבי קטגוריות; החלוקה מחושבת מול התקציב שנמשך מחודש קודם: <b>{fmt(cashCapTotal)}</b>.
+            החלוקה מחושבת מול התקציב שנמשך מ{sourceLabel}: <b>{fmt(cashCapTotal)}</b>.
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
