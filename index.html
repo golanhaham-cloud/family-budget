@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "22";
+const APP_VERSION = "23";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -118,7 +118,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -128,7 +128,7 @@ function normalizeData(d) {
     incomeEntries: d.incomeEntries || [],
     recurringIncomes: d.recurringIncomes || [],
     plannedExpenses: d.plannedExpenses || [],
-    settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
+    settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
 }
 function budgetTotalForMonth(budgets, categories, mKey, fallback) {
@@ -597,9 +597,18 @@ function BudgetApp() {
   };
   const setVariableOverride = async (mKey, val) => {
     const next = { ...(data.settings.variableOverrides || {}) };
-    if (val === null || val === undefined) delete next[mKey];
+    const metaNext = { ...(data.settings.variableOverrideMeta || {}) };
+    if (val === null || val === undefined) { delete next[mKey]; delete metaNext[mKey]; }
     else next[mKey] = val;
-    await persist({ ...data, settings: { ...data.settings, variableOverrides: next } });
+    await persist({ ...data, settings: { ...data.settings, variableOverrides: next, variableOverrideMeta: metaNext } });
+  };
+  // מטה של חיוב אשראי ידני: סטטוס (חלקי/סופי) והערה קצרה. תצוגה בלבד - אין שינוי בחישוב.
+  const setVariableOverrideMeta = async (mKey, patch) => {
+    const next = { ...(data.settings.variableOverrideMeta || {}) };
+    const merged = { status: "", note: "", ...(next[mKey] || {}), ...patch };
+    if (!merged.status && !merged.note) delete next[mKey];
+    else next[mKey] = merged;
+    await persist({ ...data, settings: { ...data.settings, variableOverrideMeta: next } });
   };
   // שמירת ניתוח: תמיד על הנתונים העדכניים ביותר (ולא על עותק ישן מזמן שליחת הבקשה), כדי שתשובה שחזרה באיחור לא תדרוס שינויים.
   const dataRef = useRef(data);
@@ -697,7 +706,8 @@ function BudgetApp() {
             creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay}
             cards={data.settings.cards || []} onSaveCards={saveCards}
             recurringIncomes={data.recurringIncomes || []} onSaveRecurring={saveRecurringIncomes} onAddOverride={addIncomeOverride} onLinkEntries={linkIncomeEntries}
-            variableOverrides={data.settings.variableOverrides} onSetVariableOverride={setVariableOverride} />
+            variableOverrides={data.settings.variableOverrides} onSetVariableOverride={setVariableOverride}
+            variableOverrideMeta={data.settings.variableOverrideMeta || {}} onSetVariableOverrideMeta={setVariableOverrideMeta} />
         )}
         {tab === "budget" && (
           <BudgetTab categories={data.categories} monthBudgets={monthBudgets} onSetBudget={setCategoryBudget}
@@ -1380,7 +1390,7 @@ function RecurringIncomesPanel({ recurringIncomes, incomeEntries, onSave, onLink
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, openingBalanceDate, onSetOpeningBalanceDate, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards, recurringIncomes, onSaveRecurring, onAddOverride, onLinkEntries }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, openingBalanceDate, onSetOpeningBalanceDate, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, variableOverrideMeta, onSetVariableOverrideMeta, cards, onSaveCards, recurringIncomes, onSaveRecurring, onAddOverride, onLinkEntries }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
@@ -1440,6 +1450,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const autoVariableSpend = budgetTotalForMonth(budgets, categories, sourceMonthKey, totalBudget);
     const autoCreditLump = creditFixedTotal + autoVariableSpend;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
+    const ovrMeta = hasOverride ? ((variableOverrideMeta || {})[m.key] || null) : null;
     const globalCredit = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoCreditLump;
     const includeGlobalCredit = !isAnchorMonth || inRange(creditBillingDay);
     // כרטיסים: עם override הידני הסכום מחליף את כל האשראי ולכן סכומי הכרטיסים לא מתווספים שוב
@@ -1458,14 +1469,15 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     directFixed.forEach(f => events.push({ day: clampDay(f.dueDay), label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
     if (includeGlobalCredit && globalCredit > 0) {
-      const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
+      const ovrStatusLabel = ovrMeta && ovrMeta.status === "partial" ? " · חלקי" : ovrMeta && ovrMeta.status === "final" ? " · סופי" : "";
+      const label = hasOverride ? `💳 חיוב אשראי (ידני)${ovrStatusLabel}` : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
       events.push({ day: clampDay(creditBillingDay), label, amount: -globalCredit });
     }
     cardLines.forEach(cl => events.push({ day: clampDay(cl.day), label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
     const keep = !anchorInfo ? m.offset >= 1 : (anchorInfo.unsupported ? false : m.key >= anchorInfo.key);
-    return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
+    return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, ovrMeta, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
   }).filter(r => r.keep);
 
   let running = Number(openingBalance) || 0;
@@ -1685,7 +1697,10 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               )}
               <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "3px 0", fontSize: 13.5 }}>
-                <span style={{ color: COLORS.sub }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}</span>
+                <span style={{ color: COLORS.sub, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>חיוב אשראי {r.hasOverride ? "(ידני)" : "(מוערך: קבועות+משתנה)"}
+                  {r.ovrMeta && r.ovrMeta.status === "partial" && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6400", background: COLORS.amberLight, borderRadius: 6, padding: "1px 6px" }}>חלקי</span>}
+                  {r.ovrMeta && r.ovrMeta.status === "final" && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "1px 6px" }}>סופי</span>}
+                </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
                     style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
@@ -1699,6 +1714,16 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
                 </div>
               )}
               {r.hasOverride && cards.length > 0 && <div style={{ fontSize: 11.5, color: COLORS.sub, paddingBottom: 4 }}>הסכום הידני מחליף את כל סכומי האשראי בחודש זה, כולל כרטיסים</div>}
+              {r.hasOverride && (
+                <div style={{ background: COLORS.paper, borderRadius: 8, padding: "6px 8px", margin: "2px 0 6px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: COLORS.sub, flexWrap: "wrap" }}>
+                    <span>סטטוס החיוב:</span>
+                    <button onClick={() => onSetVariableOverrideMeta(r.key, { status: r.ovrMeta && r.ovrMeta.status === "partial" ? "" : "partial" })} style={{ minHeight: 32, borderRadius: 8, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1.5px solid ${r.ovrMeta && r.ovrMeta.status === "partial" ? "#8a6400" : COLORS.mist}`, background: r.ovrMeta && r.ovrMeta.status === "partial" ? COLORS.amberLight : "#fff", color: r.ovrMeta && r.ovrMeta.status === "partial" ? "#8a6400" : COLORS.sub }}>חלקי</button>
+                    <button onClick={() => onSetVariableOverrideMeta(r.key, { status: r.ovrMeta && r.ovrMeta.status === "final" ? "" : "final" })} style={{ minHeight: 32, borderRadius: 8, padding: "3px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1.5px solid ${r.ovrMeta && r.ovrMeta.status === "final" ? COLORS.sage : COLORS.mist}`, background: r.ovrMeta && r.ovrMeta.status === "final" ? COLORS.sageLight : "#fff", color: r.ovrMeta && r.ovrMeta.status === "final" ? COLORS.sage : COLORS.sub }}>סופי</button>
+                  </div>
+                  <input key={r.key + "-note-" + ((r.ovrMeta && r.ovrMeta.note) || "")} type="text" maxLength={60} defaultValue={(r.ovrMeta && r.ovrMeta.note) || ""} placeholder="הערה קצרה (למשל: לא כולל מקס ועסקאות ממתינות)" onBlur={(e) => { const v = e.target.value.trim(); if (v !== ((r.ovrMeta && r.ovrMeta.note) || "")) onSetVariableOverrideMeta(r.key, { note: v }); }} style={{ marginTop: 6, width: "100%", boxSizing: "border-box", padding: "5px 8px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12 }} />
+                </div>
+              )}
               {r.unscheduled.map(u => (
                 <div key={u.cardId} role="alert" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
                   ⏳ טרם שובץ לתזרים: {u.name} — {fmt(u.total)} <span style={{ opacity: 0.85 }}>({u.why || "חסרות הגדרות חיוב"})</span>
@@ -2006,4 +2031,5 @@ ReactDOM.createRoot(document.getElementById("root")).render(<BudgetApp />);
 </script>
 </body>
 </html>
+
 
