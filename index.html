@@ -75,7 +75,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "21";
+const APP_VERSION = "22";
 const APP_VERSION_DATE = "30.10.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -118,7 +118,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
 /* ---------- storage helpers (JSONBin.io) ---------- */
 const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
 const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
-const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
+const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
     categories: d.categories || DEFAULT_CATEGORIES,
@@ -128,7 +128,7 @@ function normalizeData(d) {
     incomeEntries: d.incomeEntries || [],
     recurringIncomes: d.recurringIncomes || [],
     plannedExpenses: d.plannedExpenses || [],
-    settings: { creditLag: false, openingBalance: 0, creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
+    settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, lastAdvice: null, advices: [], cards: [], ...(d.settings || {}) },
   };
 }
 function budgetTotalForMonth(budgets, categories, mKey, fallback) {
@@ -626,6 +626,9 @@ function BudgetApp() {
   const setOpeningBalance = async (val) => {
     await persist({ ...data, settings: { ...data.settings, openingBalance: val } });
   };
+  const setOpeningBalanceDate = async (val) => {
+    await persist({ ...data, settings: { ...data.settings, openingBalanceDate: val || "" } });
+  };
 
   if (!activeBinId) return <SetupScreen onCreated={(id) => setActiveBinId(id)} />;
 
@@ -690,6 +693,7 @@ function BudgetApp() {
             incomeEntries={data.incomeEntries} onAddIncome={addIncome} onRemoveIncome={removeIncome}
             budgets={data.budgets} categories={activeCategories} creditLag={data.settings.creditLag} onToggleCreditLag={toggleCreditLag}
             openingBalance={data.settings.openingBalance} onSetOpeningBalance={setOpeningBalance}
+            openingBalanceDate={data.settings.openingBalanceDate || ""} onSetOpeningBalanceDate={setOpeningBalanceDate}
             creditBillingDay={data.settings.creditBillingDay} onSetCreditBillingDay={setCreditBillingDay}
             cards={data.settings.cards || []} onSaveCards={saveCards}
             recurringIncomes={data.recurringIncomes || []} onSaveRecurring={saveRecurringIncomes} onAddOverride={addIncomeOverride} onLinkEntries={linkIncomeEntries}
@@ -1376,7 +1380,7 @@ function RecurringIncomesPanel({ recurringIncomes, incomeEntries, onSave, onLink
 }
 
 /* ================= FORECAST TAB ================= */
-function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards, recurringIncomes, onSaveRecurring, onAddOverride, onLinkEntries }) {
+function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, incomeEntries, onAddIncome, onRemoveIncome, budgets, categories, creditLag, onToggleCreditLag, openingBalance, onSetOpeningBalance, openingBalanceDate, onSetOpeningBalanceDate, creditBillingDay, onSetCreditBillingDay, variableOverrides, onSetVariableOverride, cards, onSaveCards, recurringIncomes, onSaveRecurring, onAddOverride, onLinkEntries }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
   const [amtDraft, setAmtDraft] = useState("");
@@ -1387,26 +1391,49 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   const [newCardName, setNewCardName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // עוגן יתרה עם תאריך: היתרה מתייחסת לתחילת היום שנבחר (לפני התנועות של אותו יום),
+  // והחישוב סופר רק תנועות מהתאריך הזה והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
+  // כשהעוגן בחודש קודם התחזית מתחילה מאותו חודש, כדי שהתנועות שבין העוגן להיום לא יפלטו.
+  const realNowKey = monthKey(new Date());
+  const viewedKey = monthKey(monthDate);
+  const anchorInfo = useMemo(() => {
+    if (!openingBalanceDate) return null;
+    const parts = String(openingBalanceDate).split("-").map(Number);
+    if (parts.length !== 3 || parts.some((x) => !Number.isFinite(x))) return null;
+    const [y, mo, da] = parts;
+    if (mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+    const key = `${y}-${String(mo).padStart(2, "0")}`;
+    return { key, day: da, past: key < realNowKey, unsupported: monthsDiff(key, realNowKey) > 3,
+             dateLabel: `${String(da).padStart(2, "0")}.${String(mo).padStart(2, "0")}.${y}` };
+  }, [openingBalanceDate, realNowKey]);
+
   const months = useMemo(() => {
     const arr = [];
-    for (let i = 1; i <= 6; i++) {
+    const start = anchorInfo && !anchorInfo.unsupported && anchorInfo.key < viewedKey ? -monthsDiff(anchorInfo.key, viewedKey) : 0;
+    for (let i = start; i <= 6; i++) {
       const d = new Date(monthDate.getFullYear(), monthDate.getMonth() + i, 1);
       arr.push({ key: monthKey(d), label: `${HEBREW_MONTHS[d.getMonth()]} ${d.getFullYear()}`, offset: i });
     }
     return arr;
-  }, [monthDate]);
+  }, [monthDate, anchorInfo, viewedKey]);
 
-  let running = Number(openingBalance) || 0;
-  let runPartial = false;
-  const rows = months.map((m) => {
-    const entries = incomeEntries.filter(e => e.monthKey === m.key);
-    const recInfo = recurringIncomeItemsForMonth(recurringIncomes, incomeEntries, m.key);
+  const rowsRaw = months.map((m) => {
+    const isAnchorMonth = !!(anchorInfo && !anchorInfo.unsupported && m.key === anchorInfo.key);
+    const fromDay = isAnchorMonth ? anchorInfo.day : 1;
+    // יום בחודש תמיד בתחום החודש בפועל (למשל יום 31 בספטמבר מוצג כ־30), גם בסינון וגם בתצוגה.
+    const dim = daysInMonthKey(m.key);
+    const clampDay = (d) => Math.min(Number(d) || 1, dim);
+    const inRange = (d) => clampDay(d) >= fromDay;
+    const entries = incomeEntries.filter(e => e.monthKey === m.key && inRange(e.day));
+    const recInfoFull = recurringIncomeItemsForMonth(recurringIncomes, incomeEntries, m.key);
+    const recInfo = { ...recInfoFull, items: recInfoFull.items.filter(x => inRange(x.day)) };
     const recurringTotal = recInfo.items.reduce((s, x) => s + x.amount, 0);
     const income = entries.reduce((s, e) => s + Number(e.amount || 0), 0) + recurringTotal;
-    const { direct: directFixed, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
+    const { direct: directFixedAll, creditFromPrev: creditFixed } = fixedForecastItemsForMonth(fixedExpenses, m.key);
+    const directFixed = directFixedAll.filter(f => inRange(f.dueDay));
     const directFixedTotal = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const creditFixedTotal = creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
-    const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key));
+    const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key) && inRange(p.date.split("-")[2]));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
@@ -1414,42 +1441,48 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const autoCreditLump = creditFixedTotal + autoVariableSpend;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
     const globalCredit = hasOverride ? Number(variableOverrides[m.key]) || 0 : autoCreditLump;
+    const includeGlobalCredit = !isAnchorMonth || inRange(creditBillingDay);
     // כרטיסים: עם override הידני הסכום מחליף את כל האשראי ולכן סכומי הכרטיסים לא מתווספים שוב
     const cardInfo = cardForecastForMonth(fixedExpenses, cards, m.key);
-    const cardLines = hasOverride ? [] : cardInfo.scheduled;
+    const cardLines = (hasOverride ? [] : cardInfo.scheduled).filter(cl => !isAnchorMonth || inRange(cl.day));
     const cardTotal = cardLines.reduce((t, c) => t + c.total, 0);
     const unscheduled = hasOverride ? [] : cardInfo.unscheduled;
     const partial = unscheduled.length > 0;
-    runPartial = runPartial || partial;
-    const creditLump = globalCredit + cardTotal;
+    const creditLump = (includeGlobalCredit ? globalCredit : 0) + cardTotal;
     const balance = income - directFixedTotal - creditLump - plannedTotal;
-
-    const openingForMonth = running;
-    running += balance;
 
     // build day-by-day timeline
     const events = [];
-    entries.forEach(e => events.push({ day: Number(e.day) || 1, label: `💰 ${e.source}${e.recurringIncomeId ? " · עוקף קבועה" : ""}`, amount: Number(e.amount) || 0 }));
-    recInfo.items.forEach(x => events.push({ day: x.day, label: `💰 ${x.r.name} · קבועה${x.bonus ? " · בונוס" : ""}`, amount: x.amount }));
-    directFixed.forEach(f => events.push({ day: Number(f.dueDay) || 1, label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
+    entries.forEach(e => events.push({ day: clampDay(e.day), label: `💰 ${e.source}${e.recurringIncomeId ? " · עוקף קבועה" : ""}`, amount: Number(e.amount) || 0 }));
+    recInfo.items.forEach(x => events.push({ day: clampDay(x.day), label: `💰 ${x.r.name} · קבועה${x.bonus ? " · בונוס" : ""}`, amount: x.amount }));
+    directFixed.forEach(f => events.push({ day: clampDay(f.dueDay), label: `📎 ${f.name}${f.effectiveTo === m.key ? " · חודש אחרון" : ""}`, amount: -(Number(f.amount) || 0) }));
     plannedForMonth.forEach(p => events.push({ day: Number(p.date.split("-")[2]) || 1, label: `📌 ${p.name}`, amount: -(Number(p.amount) || 0) }));
-    if (globalCredit > 0) {
+    if (includeGlobalCredit && globalCredit > 0) {
       const label = hasOverride ? "💳 חיוב אשראי (ידני)" : `💳 חיוב אשראי (${fmt(creditFixedTotal)} קבועות + ${fmt(autoVariableSpend)} משתנה)`;
-      events.push({ day: Number(creditBillingDay) || 1, label, amount: -globalCredit });
+      events.push({ day: clampDay(creditBillingDay), label, amount: -globalCredit });
     }
-    cardLines.forEach(cl => events.push({ day: cl.day, label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
+    cardLines.forEach(cl => events.push({ day: clampDay(cl.day), label: `💳 ${cl.card.name || "כרטיס"} · הערכה לפי הגדרות הכרטיס (${cl.items.length} הוצאות)`, amount: -cl.total }));
     events.sort((a, b) => a.day - b.day || (b.amount - a.amount));
 
+    const keep = !anchorInfo ? m.offset >= 1 : (anchorInfo.unsupported ? false : m.key >= anchorInfo.key);
+    return { ...m, isAnchorMonth, fromDay, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, events, keep };
+  }).filter(r => r.keep);
+
+  let running = Number(openingBalance) || 0;
+  let runPartial = false;
+  const rows = rowsRaw.map((r) => {
+    runPartial = runPartial || r.partial;
+    const openingForMonth = running;
     let bal = openingForMonth;
     let minBal = openingForMonth;
-    let minDay = 1;
-    const timeline = events.map(ev => {
+    let minDay = r.fromDay || 1;
+    const timeline = r.events.map(ev => {
       bal += ev.amount;
       if (bal < minBal) { minBal = bal; minDay = ev.day; }
       return { ...ev, after: bal };
     });
-
-    return { ...m, entries, income, directFixedTotal, creditFixedTotal, autoVariableSpend, creditLump, plannedForMonth, plannedTotal, hasOverride, balance, running, openingForMonth, timeline, minBal, minDay, recInfo, globalCredit, cardLines, cardTotal, unscheduled, partial, runPartial };
+    running += r.balance;
+    return { ...r, openingForMonth, running, timeline, minBal, minDay, runPartial };
   });
 
   const addIncomeHere = (mKey) => {
@@ -1464,6 +1497,22 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
       <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
         כל חודש מציג בראש את היתרה הצפויה בסופו. לחיצה על חודש פותחת את הפירוט המלא, כולל סדר הכניסות וההוצאות היומי והנקודה הנמוכה בחודש
       </div>
+
+      {anchorInfo && anchorInfo.unsupported && (
+        <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ⚠️ תאריך היתרה ישן מדי לחישוב אמין (יותר מ־3 חודשים אחורה), והתחזית לא מוצגת. עדכנו יתרה ותאריך עדכניים, או נקו את שדה התאריך כדי לחזור לחישוב הרגיל.
+        </div>
+      )}
+      {anchorInfo && !anchorInfo.unsupported && anchorInfo.past && (
+        <div role="note" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ℹ️ תאריך היתרה לפני החודש הנוכחי. התנועות שבין התאריך להיום מחושבות רק מנתוני התכנון באפליקציה (הכנסות והוצאות מתוכננות), בלי תנועות בנק בפועל. אם היו תנועות נוספות, עדכנו יתרה ותאריך עדכניים.
+        </div>
+      )}
+      {anchorInfo && !anchorInfo.unsupported && rows.length === 0 && (
+        <div role="note" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
+          ℹ️ תאריך היתרה שנבחר מאוחר מתקופת התחזית. בחרו תאריך מוקדם יותר או נקו את שדה התאריך.
+        </div>
+      )}
 
       {rows.some(r => r.partial) && (
         <div role="alert" style={{ background: COLORS.amberLight, color: "#8a6400", borderRadius: 12, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 10, lineHeight: 1.5 }}>
@@ -1492,9 +1541,23 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               </button>
             </div>
             <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
-              <label style={labelStyle}>יתרת פתיחה בבנק (נכון להיום)</label>
-              <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
-                style={{ ...inputStyle, maxWidth: 170, textAlign: "center", fontWeight: 700 }} />
+              <label style={labelStyle}>יתרת פתיחה בבנק</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div style={{ flex: "0 1 140px" }}>
+                  <input type="number" defaultValue={openingBalance} onBlur={(e) => onSetOpeningBalance(Number(e.target.value) || 0)}
+                    style={{ ...inputStyle, textAlign: "center", fontWeight: 700 }} />
+                </div>
+                <div style={{ flex: "0 1 175px" }}>
+                  <label style={labelStyle}>נכון לתאריך</label>
+                  <input type="date" value={openingBalanceDate || ""} onChange={(e) => onSetOpeningBalanceDate(e.target.value)}
+                    style={{ ...inputStyle }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>
+                {openingBalanceDate
+                  ? "היתרה מתייחסת לתחילת היום שנבחר, לפני התנועות של אותו יום. התחזית סופרת רק תנועות מהתאריך והלאה (כולל אותו יום), ותנועות קודמות לא נספרות פעמיים. אם היתרה בבנק כבר כוללת את תנועות היום, בחרו את התאריך של מחר."
+                  : "ללא תאריך, היתרה נחשבת יתרת פתיחה של חודש התחזית הראשון (החודש הבא)."}
+              </div>
             </div>
             <div style={{ background: COLORS.paper, borderRadius: 12, padding: "10px 12px", marginBottom: 10 }}>
               <label style={labelStyle}>יום חיוב אשראי בחודש</label>
@@ -1563,8 +1626,9 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
         <div key={r.key} style={{ background: COLORS.card, borderRadius: 16, padding: 14, marginBottom: 10, boxShadow: "0 2px 10px rgba(20,33,61,0.04)" }}>
           <div onClick={() => setExpandedMonth(expandedMonth === r.key ? null : r.key)} role="button" aria-expanded={expandedMonth === r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, cursor: "pointer", minHeight: 44 }}>
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}</div>
+              <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14 }}>{r.label}{r.isAnchorMonth && anchorInfo ? ` · מ־${anchorInfo.day} בחודש` : ""}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                {r.isAnchorMonth && anchorInfo && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "2px 6px" }}>יתרה מתחילת {anchorInfo.dateLabel}</span>}
                 {r.runPartial && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#8a6400", background: COLORS.amberLight, borderRadius: 6, padding: "2px 6px" }}>חלקי</span>}
                 {r.minBal < r.openingForMonth && r.minBal < 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
               </div>
@@ -1647,7 +1711,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               </div>
 
               <div style={{ marginTop: 10, background: COLORS.paper, borderRadius: 10, padding: "8px 10px" }}>
-                <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>יתרת פתיחה לחודש: {fmt(r.openingForMonth)}</div>
+                <div style={{ fontSize: 11.5, color: COLORS.sub, marginBottom: 6 }}>{r.isAnchorMonth && anchorInfo ? `יתרה בתחילת ${anchorInfo.dateLabel}: ${fmt(r.openingForMonth)}` : `יתרת פתיחה לחודש: ${fmt(r.openingForMonth)}`}</div>
+                {r.isAnchorMonth && <div style={{ fontSize: 11, color: COLORS.sub, marginBottom: 6 }}>מוצגות תנועות מה־{r.fromDay} בחודש והלאה (כולל אותו יום). תנועות מוקדמות יותר משוקפות ביתרה ואינן נספרות שוב.</div>}
                 {r.timeline.length === 0 && <div style={{ fontSize: 12, color: COLORS.sub }}>אין עדיין אירועים מתוכננים החודש</div>}
                 {r.timeline.map((ev, i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: i === r.timeline.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
@@ -1941,3 +2006,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(<BudgetApp />);
 </script>
 </body>
 </html>
+
