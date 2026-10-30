@@ -301,6 +301,7 @@ function validateIncomeLink(rid, ids, incomeEntries) {
 
 
 /* ---------- DEMO (preview only): deterministic fixture, no jsonbin ---------- */
+const DEMO_NOW = (() => { const m = /[#&]today=(\d{4})-(\d{2})-(\d{2})/.exec(window.location.hash || ""); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12) : null; })();
 const DEMO_ANCHOR = (new URLSearchParams((window.location.hash || "").replace(/^#/, "")).get("anchor")) || "2026-10-29";
 const DEMO_DATA = normalizeData({
   categories: DEFAULT_CATEGORIES,
@@ -319,7 +320,7 @@ const DEMO_DATA = normalizeData({
     { id: "p1", name: "מתנה (דמו)", amount: 300, date: "2026-10-30" },
     { id: "p2", name: "מלונות (דמו)", amount: 13200, date: "2026-12-30" }
   ],
-  settings: { creditLag: false, openingBalance: -12500, openingBalanceDate: "2026-10-29", creditBillingDay: 2, variableOverrides: { "2026-11": 19829.56 }, lastAdvice: null, advices: [], cards: [] }
+  settings: { creditLag: false, openingBalance: -12500, openingBalanceDate: DEMO_ANCHOR, creditBillingDay: 2, variableOverrides: { "2026-11": 19829.56 }, lastAdvice: null, advices: [], cards: [] }
 });
 
 async function jsonbinCreate() {
@@ -1416,7 +1417,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   // עוגן יתרה עם תאריך: היתרה מתייחסת לתחילת היום שנבחר (לפני התנועות של אותו יום),
   // והחישוב סופר רק תנועות מהתאריך הזה והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
   // כשהעוגן בחודש קודם התחזית מתחילה מאותו חודש, כדי שהתנועות שבין העוגן להיום לא יפלטו.
-  const realNowKey = monthKey(new Date());
+  const realNowKey = monthKey(DEMO_NOW || new Date());
   const viewedKey = monthKey(monthDate);
   const anchorInfo = useMemo(() => {
     if (!openingBalanceDate) return null;
