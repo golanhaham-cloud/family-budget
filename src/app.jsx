@@ -25,8 +25,29 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "37";
+const APP_VERSION = "38";
 const APP_VERSION_DATE = "1.11.2026";
+const APP_CREDIT = "נבנה על ידי גולן חכם";
+/* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
+const RELEASES = [
+  { v: "38", date: "1.11.2026", changes: ["קרדיט לגולן חכם באתר", "מסך גרסאות עם מספר הגרסה ופירוט השינויים"] },
+  { v: "37", date: "1.11.2026", changes: ["ניסוח מדויק בתחזית: כניסה למינוס, העמקה או התאוששות", "אפשרות להוצאה שנתית", "כפתור יציאה בתפריט \"עוד\"", "חסימת יום לא תקין בחודש", "בחירת שנים עד 2040", "עיגול סכומים לאגורות", "חיזוק אבטחה: הקוד נבנה מראש ומוגש מקומית"] },
+  { v: "36", date: "1.11.2026", changes: ["העתקת תקציב מחודש יורש", "הצגת הוצאות מתוכננות שעברו עם אפשרות מחיקה", "חובת תאריך בהוצאה", "תווית חודש נבחר בהוצאות קבועות", "תיקון חישוב ימים שנותרו בחודש"] },
+  { v: "35", date: "1.11.2026", changes: ["הקוד חובר ל-GitHub עם פרסום אוטומטי", "תיקון שמירה ביציאה משדות תקציב ואשראי"] },
+  { v: "34", date: "31.10.2026", changes: ["מסך ההוצאות מציג את החודש הנבחר בלבד, בקיבוץ לפי יום", "חיפוש וסינון לפי קטגוריה", "עריכה ומחיקה מתוך הרשימה", "ניווט בין חודשים"] },
+  { v: "33", date: "31.10.2026", changes: ["שורת עדכניות במסך הראשי: תאריך ההוצאה האחרונה", "מצב הנתונים: יתרת פתיחה, אשראי וחשבונות משוערים"] },
+  { v: "32", date: "31.10.2026", changes: ["הפרדה ברורה בתחזית: קבועות עם פירוט לפי בנק וכרטיס, ומתחתיהן תקציב המשתנות", "חודש עם חיוב אשראי ידני מוצג בנפרד"] },
+  { v: "31", date: "30.10.2026", changes: ["גרסת הבדיקה בשרת החדש: כניסה בקוד משפחתי", "תיקון אבטחה: מפתח הגישה הוצא מהקוד הגלוי והנתונים מוגנים בצד שרת", "כל הנתונים הועברו ונבדקו מול המקור"] },
+  { v: "30", date: "30.10.2026", changes: ["הוצאות קבועות כשורות קצרות עם אישור לפני מחיקה"] },
+  { v: "29", date: "30.10.2026", changes: ["תחזית כטבלת חודשים מרוכזת עם אזהרה אחת", "פירוט יומי מלא בלחיצה על חודש"] },
+  { v: "28", date: "30.10.2026", changes: ["מסך ראשי נקי: דורש תשומת לב ופירוט מתקפל", "תפריט תחתון של 4 עם כפתור הוספה קבוע"] },
+  { v: "27", date: "30.10.2026", changes: ["חלוקת הקטגוריות יורשת לחודשים הבאים בדשבורד, בהתראות ובמסך התקציב"] },
+  { v: "26", date: "30.10.2026", changes: ["חלוקת מזומן/ביט בתחזית יורשת לחודשים הבאים"] },
+  { v: "25", date: "30.10.2026", changes: ["חודש בלי תקציב מוגדר יורש את התקציב הקודם שהוגדר"] },
+  { v: "24", date: "30.10.2026", changes: ["חלוקת תקציב משתנה לפי אמצעי תשלום: אשראי מול מזומן/ביט"] },
+  { v: "23", date: "30.10.2026", changes: ["סימון חלקי/סופי והערה לחיוב אשראי ידני"] },
+  { v: "22", date: "30.10.2026", changes: ["יתרת פתיחה עם תאריך לתחזית"] },
+];
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
@@ -448,6 +469,8 @@ function LoginScreen({ onLoggedIn }) {
           style={{ width: "100%", height: 46, borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, padding: "0 12px", fontSize: 16, marginBottom: 12 }} />
         <button type="submit" disabled={busy || !pass} style={{ width: "100%", padding: 14, borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 800, fontSize: 15, opacity: busy || !pass ? 0.6 : 1 }}>{busy ? "בודק…" : "כניסה"}</button>
         {err && <div role="alert" style={{ marginTop: 12, fontSize: 13, color: COLORS.coral }}>{err}</div>}
+        <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: COLORS.sub }}>{APP_CREDIT}</div>
+        <div style={{ textAlign: "center", marginTop: 4, fontSize: 11, color: COLORS.sub }}>גרסה {APP_VERSION} · עודכן {APP_VERSION_DATE}</div>
       </form>
     </div>
   );
@@ -684,7 +707,8 @@ function BudgetApp() {
             width: "100%", padding: "13px", borderRadius: 12, border: "none", background: nameDraft.trim() ? COLORS.sage : COLORS.mist,
             color: "#fff", fontWeight: 700, fontSize: 15, cursor: nameDraft.trim() ? "pointer" : "default"
           }}>כניסה</button>
-          <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: COLORS.sub }}>גרסה {APP_VERSION} · עודכן {APP_VERSION_DATE}</div>
+          <div style={{ textAlign: "center", marginTop: 14, fontSize: 11, color: COLORS.sub }}>{APP_CREDIT}</div>
+          <div style={{ textAlign: "center", marginTop: 4, fontSize: 11, color: COLORS.sub }}>גרסה {APP_VERSION} · עודכן {APP_VERSION_DATE}</div>
         </div>
       </div>
     );
@@ -714,7 +738,8 @@ function BudgetApp() {
         )}
         {tab === "expenses" && <ExpensesTab key={mKey} expenses={data.expenses} categories={data.categories} selectedMonth={mKey} onEdit={setEditExpense} />}
         {tab === "more" && <MoreMenu onPick={setTab} onRestore={restoreBackup} onLogout={logoutRequest} />}
-        {(tab === "fixed" || tab === "budget" || tab === "advice") && (
+        {tab === "versions" && <VersionsScreen />}
+        {(tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions") && (
           <button onClick={() => setTab("more")} style={{ border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer", padding: "2px 0 10px", display: "block" }}>‹ חזרה ל"עוד"</button>
         )}
         {tab === "fixed" && (
@@ -791,6 +816,7 @@ function MoreMenu({ onPick, onRestore, onLogout }) {
     { id: "fixed", icon: "📌", label: "הוצאות קבועות", sub: "סכומים, כרטיסים, תוקף ושינוי סכום" },
     { id: "budget", icon: "💰", label: "תקציב", sub: "תקציב לכל קטגוריה וחלוקת מזומן/אשראי" },
     { id: "advice", icon: "💬", label: "ייעוץ", sub: "חוות דעת וניתוחים קודמים" },
+    { id: "versions", icon: "🧾", label: "גרסאות", sub: "מספר הגרסה ופירוט השינויים" },
   ];
   return (
     <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden" }}>
@@ -826,6 +852,27 @@ function MoreMenu({ onPick, onRestore, onLogout }) {
           <span style={{ display: "block", fontSize: 12, color: COLORS.sub, marginTop: 2 }}>נעילת האתר במכשיר זה; הכניסה מחדש עם הקוד המשפחתי</span>
         </span>
       </button>
+    </div>
+  );
+}
+function VersionsScreen() {
+  return (
+    <div>
+      <div style={{ background: COLORS.card, borderRadius: 16, padding: "14px 16px", marginBottom: 10, textAlign: "center" }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 17, color: COLORS.ink }}>גרסה {APP_VERSION} · עודכן {APP_VERSION_DATE}</div>
+        <div style={{ fontSize: 12, color: COLORS.sub, marginTop: 4 }}>{APP_CREDIT}</div>
+      </div>
+      {RELEASES.map((r) => (
+        <div key={r.v} style={{ background: COLORS.card, borderRadius: 16, padding: "14px 16px", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 700, fontSize: 15, color: COLORS.ink }}>גרסה {r.v}</span>
+            <span style={{ fontSize: 12, color: COLORS.sub }}>{r.date}</span>
+          </div>
+          <ul style={{ margin: "8px 0 0", paddingInlineStart: 18, color: COLORS.sub, fontSize: 13, lineHeight: 1.6 }}>
+            {r.changes.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </div>
+      ))}
     </div>
   );
 }
