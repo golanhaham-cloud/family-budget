@@ -1,4 +1,4 @@
-const CACHE_NAME = "family-budget-cache-v7";
+const CACHE_NAME = "family-budget-cache-v10";
 const APP_SHELL = ["/", "/index.html", "/app.js", "/vendor/react.production.min.js", "/vendor/react-dom.production.min.js", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

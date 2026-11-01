@@ -78,11 +78,15 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "38";
+const APP_VERSION = "39";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [{
+  v: "39",
+  date: "1.11.2026",
+  changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"]
+}, {
   v: "38",
   date: "1.11.2026",
   changes: ["קרדיט לגולן חכם באתר", "מסך גרסאות עם מספר הגרסה ופירוט השינויים"]
@@ -586,6 +590,25 @@ function validateIncomeLink(rid, ids, incomeEntries) {
   }
   return "";
 }
+
+// שמות המשתמשים האחרונים במכשיר הזה, לכל משפחה בנפרד (לא בשרת, לא בקוד) — לבחירה מהירה במסך "מי אתה?"
+const RECENT_NAMES_KEY = "fb-recent-names";
+function loadRecentNames(householdKey) {
+  try {
+    const a = JSON.parse(localStorage.getItem(RECENT_NAMES_KEY + ":" + (householdKey || "")) || "[]");
+    return Array.isArray(a) ? a.filter(x => typeof x === "string" && x.trim()).slice(0, 4) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function rememberName(householdKey, n) {
+  try {
+    const k = RECENT_NAMES_KEY + ":" + (householdKey || "");
+    const a = loadRecentNames(householdKey).filter(x => x !== n);
+    a.unshift(n);
+    localStorage.setItem(k, JSON.stringify(a.slice(0, 4)));
+  } catch (e) {}
+}
 let DATA_VERSION = 0;
 const API_GET = {
   credentials: "same-origin",
@@ -604,9 +627,21 @@ async function loadAppData() {
     };
     const json = await res.json();
     DATA_VERSION = json.version || 0;
+    let d = json.data ? normalizeData(json.data) : EMPTY_DATA;
+    if (!json.data && json.initialSettings && typeof json.initialSettings === "object") d = {
+      ...EMPTY_DATA,
+      settings: {
+        ...EMPTY_DATA.settings,
+        ...json.initialSettings
+      }
+    };
     return {
       status: "ok",
-      data: json.data ? normalizeData(json.data) : EMPTY_DATA
+      data: d,
+      household: json.household && json.household.name || "",
+      householdKey: json.household && json.household.key || "",
+      admin: !!json.admin,
+      adviceEnabled: json.adviceEnabled !== false
     };
   } catch (e) {
     console.error(e);
@@ -654,9 +689,35 @@ async function loginRequest(passcode) {
       passcode
     })
   });
+  let json = {};
+  try {
+    json = await res.json();
+  } catch (e) {}
   return {
     ok: res.ok,
-    status: res.status
+    status: res.status,
+    pending: !!json.pending,
+    inviteToken: json.inviteToken || ""
+  };
+}
+async function claimRequest(payload) {
+  const res = await fetch("/api/households", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "fb"
+    },
+    body: JSON.stringify(payload)
+  });
+  let json = {};
+  try {
+    json = await res.json();
+  } catch (e) {}
+  return {
+    ok: res.ok,
+    status: res.status,
+    json
   };
 }
 async function logoutRequest() {
@@ -902,9 +963,310 @@ function CumulativeLineChart({
   }));
 }
 
+/* ================= מסך פתיחה ראשונה למשפחה מוזמנת ================= */
+function generateClientCode() {
+  const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  let s2 = "";
+  for (let i = 0; i < 8; i++) s2 += alpha[b[i] % alpha.length];
+  return s2;
+}
+function OnboardingScreen({
+  inviteToken,
+  onDone
+}) {
+  const [famName, setFamName] = useState("");
+  const [code, setCode] = useState("");
+  const [members, setMembers] = useState([""]);
+  const [showMore, setShowMore] = useState(false);
+  const [billingDay, setBillingDay] = useState("");
+  const [balance, setBalance] = useState("");
+  const [balanceDate, setBalanceDate] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const input = {
+    width: "100%",
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: `1.5px solid ${COLORS.mist}`,
+    fontSize: 14,
+    boxSizing: "border-box"
+  };
+  const setMember = (i, v) => setMembers(members.map((m, j) => j === i ? v : m));
+  const submit = async e => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    const r = await claimRequest({
+      inviteToken,
+      name: famName.trim(),
+      passcode: code.trim(),
+      members: members.map(m => m.trim()).filter(Boolean),
+      creditBillingDay: billingDay.trim(),
+      openingBalance: balance.trim(),
+      openingBalanceDate: balanceDate
+    });
+    if (r.ok) {
+      onDone();
+      return;
+    }
+    setErr(r.json.error || (r.status === 401 || r.status === 410 ? "קישור ההצטרפות פג. בקשו קוד חדש" : "ההקמה נכשלה. נסו שוב."));
+    setBusy(false);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: "100vh",
+      background: COLORS.paper,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("form", {
+    onSubmit: submit,
+    style: {
+      background: COLORS.card,
+      borderRadius: 20,
+      padding: 26,
+      width: "100%",
+      maxWidth: 400,
+      boxShadow: "0 8px 30px rgba(20,33,61,0.08)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 800,
+      fontSize: 20,
+      color: COLORS.ink,
+      marginBottom: 6
+    }
+  }, "הקמת האתר של המשפחה"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.sub,
+      fontSize: 13,
+      marginBottom: 18,
+      lineHeight: 1.6
+    }
+  }, "כמה פרטים ומתחילים. הנתונים מתחילים ריקים, וכל מה שתזינו יישאר רק אצלכם."), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "שם המשפחה"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "שם המשפחה",
+    placeholder: "למשל: משפחת לוי",
+    value: famName,
+    onChange: e => setFamName(e.target.value),
+    style: {
+      ...input,
+      marginBottom: 12
+    }
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "קוד כניסה משלכם"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    "aria-label": "קוד כניסה",
+    placeholder: "4 תווים לפחות",
+    value: code,
+    onChange: e => setCode(e.target.value),
+    style: {
+      ...input,
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setCode(generateClientCode()),
+    style: {
+      padding: "0 14px",
+      borderRadius: 12,
+      border: `1.5px solid ${COLORS.sage}`,
+      background: "#fff",
+      color: COLORS.sage,
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: "pointer",
+      whiteSpace: "nowrap"
+    }
+  }, "צור קוד")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: COLORS.sub,
+      marginBottom: 12
+    }
+  }, "איתו תכנסו לאתר מעכשיו — שמרו אותו."), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "מי במשפחה? (אפשר גם אחר כך)"), members.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 8,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    "aria-label": `שם משתמש ${i + 1}`,
+    placeholder: i === 0 ? "למשל: דני" : "עוד שם",
+    value: m,
+    onChange: e => setMember(i, e.target.value),
+    style: {
+      ...input,
+      flex: 1
+    }
+  }), members.length > 1 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setMembers(members.filter((_, j) => j !== i)),
+    "aria-label": "הסרת שם",
+    style: {
+      border: "none",
+      background: "none",
+      color: COLORS.sub,
+      fontSize: 16,
+      cursor: "pointer"
+    }
+  }, "✕"))), members.length < 10 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setMembers([...members, ""]),
+    style: {
+      border: "none",
+      background: "none",
+      color: COLORS.sage,
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: "pointer",
+      padding: "2px 0 10px"
+    }
+  }, "+ עוד שם"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setShowMore(!showMore),
+    style: {
+      width: "100%",
+      textAlign: "start",
+      border: "none",
+      background: "none",
+      color: COLORS.sub,
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: "pointer",
+      padding: "6px 0"
+    }
+  }, showMore ? "▾" : "◂", " הגדרות נוספות (לא חובה)"), showMore && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      margin: "6px 0 4px"
+    }
+  }, "יום חיוב האשראי בחודש"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "יום חיוב אשראי",
+    type: "number",
+    min: "1",
+    max: "28",
+    placeholder: "למשל: 10",
+    value: billingDay,
+    onChange: e => setBillingDay(e.target.value),
+    style: {
+      ...input,
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "יתרת פתיחה בעו\"ש (₪)"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "יתרת פתיחה",
+    type: "number",
+    step: "0.01",
+    placeholder: "למשל: 2500 או -800",
+    value: balance,
+    onChange: e => setBalance(e.target.value),
+    style: {
+      ...input,
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "נכון לתאריך"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "תאריך יתרת פתיחה",
+    type: "date",
+    value: balanceDate,
+    onChange: e => setBalanceDate(e.target.value),
+    style: {
+      ...input,
+      direction: "ltr",
+      textAlign: "right"
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    disabled: busy || !famName.trim() || code.trim().length < 4,
+    style: {
+      width: "100%",
+      marginTop: 14,
+      padding: 14,
+      borderRadius: 12,
+      border: "none",
+      background: famName.trim() && code.trim().length >= 4 ? COLORS.sage : COLORS.mist,
+      color: "#fff",
+      fontWeight: 800,
+      fontSize: 15,
+      cursor: "pointer"
+    }
+  }, busy ? "מקים…" : "פתיחת האתר"), err && /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    style: {
+      marginTop: 12,
+      fontSize: 13,
+      color: COLORS.coral
+    }
+  }, err), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      marginTop: 14,
+      fontSize: 11,
+      color: COLORS.sub
+    }
+  }, APP_CREDIT)));
+}
+
 /* ================= LOGIN SCREEN ================= */
 function LoginScreen({
-  onLoggedIn
+  onLoggedIn,
+  onInvite
 }) {
   const [pass, setPass] = useState("");
   const [busy, setBusy] = useState(false);
@@ -916,6 +1278,11 @@ function LoginScreen({
     setErr("");
     try {
       const r = await loginRequest(pass);
+      if (r.ok && r.pending) {
+        setPass("");
+        onInvite(r.inviteToken);
+        return;
+      }
       if (r.ok) {
         setPass("");
         onLoggedIn();
@@ -1020,6 +1387,12 @@ function BudgetApp() {
   const [data, setData] = useState(EMPTY_DATA);
   const [user, setUser] = useState(null);
   const [nameDraft, setNameDraft] = useState("");
+  const [inviteToken, setInviteToken] = useState("");
+  const [householdName, setHouseholdName] = useState("");
+  const [householdKey, setHouseholdKey] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adviceEnabled, setAdviceEnabled] = useState(true);
+  const [recentNames, setRecentNames] = useState([]);
   const [monthDate, setMonthDate] = useState(new Date());
   const [tab, setTab] = useState("dashboard");
   const [showAddExpense, setShowAddExpense] = useState(false);
@@ -1030,6 +1403,11 @@ function BudgetApp() {
     const r = await loadAppData();
     if (r.status === "ok") {
       setData(r.data);
+      setHouseholdName(r.household || "");
+      setHouseholdKey(r.householdKey || "");
+      setIsAdmin(!!r.admin);
+      setAdviceEnabled(r.adviceEnabled !== false);
+      setRecentNames(loadRecentNames(r.householdKey));
       setAuthState("ready");
     } else setAuthState(r.status === "unauthorized" ? "login" : "error");
     setLoading(false);
@@ -1059,6 +1437,11 @@ function BudgetApp() {
   const showToast = msg => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
+  };
+  const pickUser = n => {
+    rememberName(householdKey, n);
+    setRecentNames(loadRecentNames(householdKey));
+    setUser(n);
   };
   const mKey = monthKey(monthDate);
   const activeCategories = useMemo(() => data.categories.filter(c => c.active !== false), [data.categories]);
@@ -1451,10 +1834,23 @@ function BudgetApp() {
       }
     });
   };
+  if (authState === "onboarding") return /*#__PURE__*/React.createElement(OnboardingScreen, {
+    inviteToken: inviteToken,
+    onDone: () => {
+      setInviteToken("");
+      setAuthState("login");
+      setLoading(true);
+      reload();
+    }
+  });
   if (authState === "login") return /*#__PURE__*/React.createElement(LoginScreen, {
     onLoggedIn: () => {
       setLoading(true);
       reload();
+    },
+    onInvite: t => {
+      setInviteToken(t);
+      setAuthState("onboarding");
     }
   });
   if (authState === "error") return /*#__PURE__*/React.createElement("div", {
@@ -1485,6 +1881,8 @@ function BudgetApp() {
     }, "טוען…"));
   }
   if (!user) {
+    const members = (data.settings && Array.isArray(data.settings.members) ? data.settings.members : []).filter(x => typeof x === "string" && x.trim());
+    const chooserNames = [...members, ...recentNames.filter(n => !members.includes(n))].slice(0, 6);
     return /*#__PURE__*/React.createElement("div", {
       style: {
         minHeight: "100vh",
@@ -1511,23 +1909,25 @@ function BudgetApp() {
         color: COLORS.ink,
         marginBottom: 4
       }
-    }, "האתר הפיננסי של משפחת חכם"), /*#__PURE__*/React.createElement("div", {
+    }, householdName ? `האתר הפיננסי של ${householdName}` : "האתר הפיננסי"), /*#__PURE__*/React.createElement("div", {
       style: {
         color: COLORS.sub,
         fontSize: 14,
         marginBottom: 20
       }
-    }, "מי אתה?"), /*#__PURE__*/React.createElement("div", {
+    }, "מי אתה?"), chooserNames.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
         display: "flex",
         gap: 8,
-        marginBottom: 14
+        marginBottom: 14,
+        flexWrap: "wrap"
       }
-    }, ["גולן", "צליל"].map(n => /*#__PURE__*/React.createElement("button", {
+    }, chooserNames.map(n => /*#__PURE__*/React.createElement("button", {
       key: n,
-      onClick: () => setUser(n),
+      onClick: () => pickUser(n),
       style: {
         flex: 1,
+        minWidth: 80,
         padding: "12px 8px",
         borderRadius: 12,
         border: `2px solid ${nameDraft === n ? COLORS.sage : COLORS.mist}`,
@@ -1538,8 +1938,8 @@ function BudgetApp() {
         cursor: "pointer"
       }
     }, n))), /*#__PURE__*/React.createElement("input", {
-      placeholder: "או הקלד/י שם משלך",
-      value: ["גולן", "צליל"].includes(nameDraft) ? "" : nameDraft,
+      placeholder: chooserNames.length ? "או הקלד/י שם אחר" : "הקלד/י את שמך",
+      value: chooserNames.includes(nameDraft) ? "" : nameDraft,
       onChange: e => setNameDraft(e.target.value),
       style: {
         width: "100%",
@@ -1552,7 +1952,7 @@ function BudgetApp() {
       }
     }), /*#__PURE__*/React.createElement("button", {
       disabled: !nameDraft.trim(),
-      onClick: () => setUser(nameDraft.trim()),
+      onClick: () => pickUser(nameDraft.trim()),
       style: {
         width: "100%",
         padding: "13px",
@@ -1687,8 +2087,9 @@ function BudgetApp() {
   }), tab === "more" && /*#__PURE__*/React.createElement(MoreMenu, {
     onPick: setTab,
     onRestore: restoreBackup,
-    onLogout: logoutRequest
-  }), tab === "versions" && /*#__PURE__*/React.createElement(VersionsScreen, null), (tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions") && /*#__PURE__*/React.createElement("button", {
+    onLogout: logoutRequest,
+    isAdmin: isAdmin
+  }), tab === "versions" && /*#__PURE__*/React.createElement(VersionsScreen, null), tab === "households" && isAdmin && /*#__PURE__*/React.createElement(HouseholdsScreen, null), (tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions" || tab === "households") && /*#__PURE__*/React.createElement("button", {
     onClick: () => setTab("more"),
     style: {
       border: "none",
@@ -1762,7 +2163,8 @@ function BudgetApp() {
     fixedExpenses: activeFixed.filter(f => isFixedInPeriod(f, mKey)),
     advices: data.settings.advices || [],
     legacyAdvice: data.settings.lastAdvice,
-    onSaved: saveAdvice
+    onSaved: saveAdvice,
+    enabled: adviceEnabled
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
@@ -1814,7 +2216,7 @@ function BudgetApp() {
     icon: "🧾",
     label: "הוצאות"
   }), /*#__PURE__*/React.createElement(NavBtn, {
-    active: ["more", "fixed", "budget", "advice"].includes(tab),
+    active: ["more", "fixed", "budget", "advice", "households"].includes(tab),
     onClick: () => setTab("more"),
     icon: "☰",
     label: "עוד"
@@ -1924,7 +2326,8 @@ async function downloadBackup() {
 function MoreMenu({
   onPick,
   onRestore,
-  onLogout
+  onLogout,
+  isAdmin
 }) {
   const items = [{
     id: "fixed",
@@ -1941,7 +2344,12 @@ function MoreMenu({
     icon: "💬",
     label: "ייעוץ",
     sub: "חוות דעת וניתוחים קודמים"
-  }, {
+  }, ...(isAdmin ? [{
+    id: "households",
+    icon: "👪",
+    label: "ניהול משפחות",
+    sub: "קוד כניסה ונתונים נפרדים לכל משפחה"
+  }] : []), {
     id: "versions",
     icon: "🧾",
     label: "גרסאות",
@@ -2111,6 +2519,281 @@ function MoreMenu({
       marginTop: 2
     }
   }, "נעילת האתר במכשיר זה; הכניסה מחדש עם הקוד המשפחתי"))));
+}
+/* ================= מסך ניהול משפחות (מנהל בלבד) ================= */
+async function householdsRequest(method, body) {
+  const res = await fetch("/api/households", {
+    method,
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "fb"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  let json = {};
+  try {
+    json = await res.json();
+  } catch (e) {}
+  return {
+    ok: res.ok,
+    status: res.status,
+    json
+  };
+}
+function HouseholdsScreen() {
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState(null);
+  const [copied, setCopied] = useState("");
+  const reload = async () => {
+    const r = await householdsRequest("GET");
+    if (r.ok) setList(r.json.households || []);else setErr("טעינת רשימת המשפחות נכשלה");
+  };
+  useEffect(() => {
+    reload();
+  }, []);
+  const add = async e => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    setCreated(null);
+    const r = await householdsRequest("POST", {});
+    setBusy(false);
+    if (!r.ok) {
+      setErr(r.json.error || "יצירת ההזמנה נכשלה");
+      return;
+    }
+    setCreated({
+      inviteCode: r.json.inviteCode
+    });
+    reload();
+  };
+  const remove = async h => {
+    if (!window.confirm(h.pending ? "לבטל את ההזמנה? הקוד ייפסק לעבוד מיד." : `להשבית את "${h.name}"?\n\nהקוד שלהם ייפסק לעבוד מיד. הנתונים שלהם נשמרים, ואפשר לשחזר את הגישה בכל רגע מהמסך הזה.`)) return;
+    const r = await householdsRequest("DELETE", {
+      id: h.id
+    });
+    if (!r.ok) {
+      setErr(r.json.error || "ההשבתה נכשלה");
+      return;
+    }
+    reload();
+  };
+  const restore = async h => {
+    const r = await householdsRequest("PUT", {
+      id: h.id
+    });
+    if (!r.ok) {
+      setErr(r.json.error || "השחזור נכשל");
+      return;
+    }
+    reload();
+  };
+  const copy = async (text, key) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(""), 2000);
+    } catch (e) {
+      window.prompt("העתיקו את הקוד:", text);
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 800,
+      fontSize: 17,
+      color: COLORS.ink,
+      marginBottom: 4
+    }
+  }, "ניהול משפחות"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: COLORS.sub,
+      lineHeight: 1.6
+    }
+  }, "צרו הזמנה ושלחו את הקוד עם כתובת האתר. בפתיחה הראשונה המשפחה בוחרת בעצמה שם, קוד כניסה ושמות משתמשים. הנתונים של כל משפחה נפרדים לגמרי ומתחילים ריקים.")), created && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.sageLight,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10,
+      border: `1.5px solid ${COLORS.sage}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15,
+      color: COLORS.ink,
+      marginBottom: 6
+    }
+  }, "ההזמנה מוכנה ✔"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: COLORS.sub,
+      marginBottom: 8
+    }
+  }, "קוד הזמנה חד-פעמי — שלחו אותו עם כתובת האתר:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("code", {
+    style: {
+      flex: 1,
+      background: "#fff",
+      borderRadius: 10,
+      padding: "10px 12px",
+      fontSize: 18,
+      fontWeight: 700,
+      letterSpacing: 1,
+      textAlign: "center",
+      direction: "ltr"
+    }
+  }, created.inviteCode), /*#__PURE__*/React.createElement("button", {
+    onClick: () => copy(created.inviteCode, "new"),
+    style: {
+      padding: "10px 14px",
+      borderRadius: 10,
+      border: "none",
+      background: COLORS.sage,
+      color: "#fff",
+      fontWeight: 700,
+      fontSize: 14,
+      cursor: "pointer"
+    }
+  }, copied === "new" ? "הועתק ✔" : "העתקה"))), /*#__PURE__*/React.createElement("form", {
+    onSubmit: add,
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "submit",
+    disabled: busy,
+    style: {
+      width: "100%",
+      padding: 13,
+      borderRadius: 12,
+      border: "none",
+      background: COLORS.sage,
+      color: "#fff",
+      fontWeight: 700,
+      fontSize: 15,
+      cursor: "pointer",
+      opacity: busy ? 0.6 : 1
+    }
+  }, busy ? "יוצר…" : "יצירת הזמנה חדשה"), err && /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    style: {
+      marginTop: 10,
+      fontSize: 13,
+      color: COLORS.coral
+    }
+  }, err)), !list && !err && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.sub,
+      fontSize: 13,
+      textAlign: "center",
+      padding: 10
+    }
+  }, "טוען…"), list && list.map(h => /*#__PURE__*/React.createElement("div", {
+    key: h.id,
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10,
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      opacity: h.disabled ? 0.55 : 1
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 22
+    }
+  }, h.admin ? "🏠" : "👪"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontWeight: 700,
+      fontSize: 15,
+      color: COLORS.ink
+    }
+  }, h.pending ? "הזמנה ממתינה" : h.name, h.admin ? " (אתם)" : "", h.disabled ? " · מושבתת" : ""), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 12,
+      color: COLORS.sub,
+      marginTop: 2
+    }
+  }, h.pending ? "טרם נכנסו" : h.createdAt ? `נוספה ${new Date(h.createdAt).toLocaleDateString("he-IL")}` : ""), h.pending && !h.disabled && /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      marginTop: 6
+    }
+  }, /*#__PURE__*/React.createElement("code", {
+    style: {
+      background: COLORS.paper,
+      borderRadius: 8,
+      padding: "4px 10px",
+      fontSize: 14,
+      fontWeight: 700,
+      letterSpacing: 1,
+      direction: "ltr"
+    }
+  }, h.inviteCode), /*#__PURE__*/React.createElement("button", {
+    onClick: () => copy(h.inviteCode, h.id),
+    style: {
+      border: "none",
+      background: "none",
+      color: COLORS.sage,
+      fontWeight: 700,
+      fontSize: 12.5,
+      cursor: "pointer"
+    }
+  }, copied === h.id ? "הועתק ✔" : "העתקה"))), !h.admin && !h.disabled && /*#__PURE__*/React.createElement("button", {
+    onClick: () => remove(h),
+    title: "השבתה",
+    "aria-label": h.pending ? "ביטול הזמנה" : `השבתת ${h.name}`,
+    style: {
+      border: "none",
+      background: "none",
+      fontSize: 18,
+      cursor: "pointer"
+    }
+  }, "⏸"), !h.admin && h.disabled && /*#__PURE__*/React.createElement("button", {
+    onClick: () => restore(h),
+    title: "שחזור גישה",
+    "aria-label": h.pending ? "שחזור הזמנה" : `שחזור ${h.name}`,
+    style: {
+      border: "none",
+      background: "none",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.sage,
+      cursor: "pointer"
+    }
+  }, "שחזור"))));
 }
 function VersionsScreen() {
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -6289,7 +6972,8 @@ function AdviceTab({
   fixedExpenses,
   advices,
   legacyAdvice,
-  onSaved
+  onSaved,
+  enabled = true
 }) {
   const period = monthKey(monthDate);
   const label = periodLabel(period);
@@ -6398,6 +7082,39 @@ function AdviceTab({
     }
   }, loading ? "מנתח…" : text);
   const stale = current && current.fingerprint && current.fingerprint !== fingerprint;
+  if (!enabled) return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 700,
+      fontSize: 15,
+      margin: "6px 2px 4px"
+    }
+  }, "חוות דעת AI · ", label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: 22,
+      textAlign: "center",
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 30,
+      marginBottom: 10
+    }
+  }, "💬"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 14,
+      marginBottom: 6
+    }
+  }, "הייעוץ האוטומטי כבוי כרגע במשפחה הזו"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: COLORS.sub,
+      fontSize: 12.5,
+      lineHeight: 1.7
+    }
+  }, "הניתוח שולח נתונים לשירות חיצוני, ולכן הוא זמין כרגע למשפחה הראשית בלבד. כשהייעוץ כבוי, הנתונים שלכם לא נשלחים לשירות הניתוח. אם תרצו להפעיל אותו, פנו למנהל האתר.")));
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontFamily: "Heebo, sans-serif",
