@@ -78,7 +78,7 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "40";
+const APP_VERSION = "41";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
@@ -90,6 +90,10 @@ const RELEASES = [{
   v: "39",
   date: "1.11.2026",
   changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"]
+}, {
+  v: "41",
+  date: "1.11.2026",
+  changes: ["תיקון: סימון חלקי/סופי והערת חיוב האשראי נשמרים באמינות גם בעריכות רצופות", "לחיצה חוזרת על הסטטוס הפעיל כבר לא מאפסת אותו"]
 }, {
   v: "38",
   date: "1.11.2026",
@@ -1480,6 +1484,7 @@ function BudgetApp() {
   }, [reload]);
   const persist = useCallback(async next => {
     const prev = dataRef.current;
+    dataRef.current = next;
     setData(next);
     const r = await saveAppData(next);
     if (r === "ok") return true;
@@ -1489,9 +1494,11 @@ function BudgetApp() {
     } else if (r === "unauthorized") {
       setAuthState("login");
     } else if (r === "rate") {
+      dataRef.current = prev;
       setData(prev);
       showToast("הגעתם למגבלת השמירות. נסו שוב מאוחר יותר.");
     } else {
+      dataRef.current = prev;
       setData(prev);
       showToast("השמירה נכשלה. השינוי לא נשמר, נסו שוב.");
     }
@@ -1799,24 +1806,31 @@ function BudgetApp() {
     });
   };
   // מטה של חיוב אשראי ידני: סטטוס (חלקי/סופי) והערה קצרה. תצוגה בלבד - אין שינוי בחישוב.
-  const setVariableOverrideMeta = async (mKey, patch) => {
-    const next = {
-      ...(data.settings.variableOverrideMeta || {})
-    };
-    const merged = {
-      status: "",
-      note: "",
-      ...(next[mKey] || {}),
-      ...patch
-    };
-    if (!merged.status && !merged.note) delete next[mKey];else next[mKey] = merged;
-    await persist({
-      ...data,
-      settings: {
-        ...data.settings,
-        variableOverrideMeta: next
-      }
+  // שמירות המטה מתורגמנות ונבנות מהמצב העדכני ביותר (dataRef), כדי שעריכת הערה שנשמרת בבלור
+  // ולחיצה על כפתור סטטוס שבאה מיד אחריה לא ידרסו אחת את השנייה על בסיס עותק ישן של הנתונים.
+  const metaSaveQueue = useRef(Promise.resolve());
+  const setVariableOverrideMeta = (mKey, patch) => {
+    metaSaveQueue.current = metaSaveQueue.current.then(async () => {
+      const cur = dataRef.current;
+      const next = {
+        ...(cur.settings.variableOverrideMeta || {})
+      };
+      const merged = {
+        status: "",
+        note: "",
+        ...(next[mKey] || {}),
+        ...patch
+      };
+      if (!merged.status && !merged.note) delete next[mKey];else next[mKey] = merged;
+      await persist({
+        ...cur,
+        settings: {
+          ...cur.settings,
+          variableOverrideMeta: next
+        }
+      });
     });
+    return metaSaveQueue.current;
   };
   // חלוקת התקציב המשתנה לפי אמצעי תשלום: הסכום ששולם במזומן/ביט יורד מהבנק באותו חודש, והשאר בחיוב האשראי.
   // ריק מוחק את החלוקה של החודש (והוא יורש את החלוקה האחרונה שהוגדרה לפניו); 0 מפורש = הכול אשראי באותו חודש וחוסם את הירושה.
@@ -6540,7 +6554,7 @@ function ForecastTab({
     }
   }, /*#__PURE__*/React.createElement("span", null, "סטטוס החיוב:"), /*#__PURE__*/React.createElement("button", {
     onClick: () => onSetVariableOverrideMeta(r.key, {
-      status: r.ovrMeta && r.ovrMeta.status === "partial" ? "" : "partial"
+      status: "partial"
     }),
     style: {
       minHeight: 32,
@@ -6555,7 +6569,7 @@ function ForecastTab({
     }
   }, "חלקי"), /*#__PURE__*/React.createElement("button", {
     onClick: () => onSetVariableOverrideMeta(r.key, {
-      status: r.ovrMeta && r.ovrMeta.status === "final" ? "" : "final"
+      status: "final"
     }),
     style: {
       minHeight: 32,
