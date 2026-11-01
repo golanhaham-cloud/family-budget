@@ -25,11 +25,12 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "41";
+const APP_VERSION = "42";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [
+  { v: "42", date: "1.11.2026", changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה"] },
   { v: "40", date: "1.11.2026", changes: ["השוואה לחודש הקודם במסך הראשי: סך ההוצאות והפרש לכל קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם"] },
   { v: "39", date: "1.11.2026", changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"] },
   { v: "41", date: "1.11.2026", changes: ["תיקון: סימון חלקי/סופי והערת חיוב האשראי נשמרים באמינות גם בעריכות רצופות", "לחיצה חוזרת על הסטטוס הפעיל כבר לא מאפסת אותו"] },
@@ -428,6 +429,36 @@ function RingGauge({ percent, size = 108, stroke = 11, color }) {
     </svg>
   );
 }
+
+/* לוגו האתר במסכי הכניסה. לפני הזנת הקוד המשפחה עוד לא ידועה ולכן הנוסח כללי;
+   אחרי שהשרת מאשר את הקוד מוצג שם המשפחה: "ניהול פיננסי של משפחת …". */
+function LogoMark({ size = 72 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" role="img" aria-label="לוגו ניהול פיננסי משפחתי">
+      <rect width="64" height="64" rx="18" fill={COLORS.sage} />
+      <path d="M16 33 L32 20 L48 33" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M21 31.5 V46 H43 V31.5" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <text x="32" y="42.5" textAnchor="middle" fontSize="14" fontWeight="800" fill={COLORS.amber} fontFamily="Heebo, Assistant, sans-serif">₪</text>
+    </svg>
+  );
+}
+function familyDisplayName(householdName) {
+  const n = (householdName || "").trim();
+  if (!n) return "";
+  return n.startsWith("משפחת") ? n : `משפחת ${n}`;
+}
+function FamilyLogo({ householdName = "", size = 72 }) {
+  const fam = familyDisplayName(householdName);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 18 }}>
+      <LogoMark size={size} />
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 21, color: COLORS.ink, lineHeight: 1.25 }}>ניהול פיננסי</div>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, color: COLORS.sage, marginTop: 2 }}>{fam ? `של ${fam}` : "משפחתי"}</div>
+      </div>
+    </div>
+  );
+}
 function ProgressBar({ percent, color }) {
   return (
     <div style={{ height: 8, borderRadius: 999, background: COLORS.mist, overflow: "hidden" }}>
@@ -543,7 +574,8 @@ function OnboardingScreen({ inviteToken, onDone }) {
   return (
     <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <form onSubmit={submit} style={{ background: COLORS.card, borderRadius: 20, padding: 26, width: "100%", maxWidth: 400, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
-        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>הקמת האתר של המשפחה</div>
+        <FamilyLogo householdName={famName} />
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6, textAlign: "center" }}>הקמת האתר של המשפחה</div>
         <div style={{ color: COLORS.sub, fontSize: 13, marginBottom: 18, lineHeight: 1.6 }}>כמה פרטים ומתחילים. הנתונים מתחילים ריקים, וכל מה שתזינו יישאר רק אצלכם.</div>
 
         <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: COLORS.ink, marginBottom: 4 }}>שם המשפחה</label>
@@ -605,7 +637,8 @@ function LoginScreen({ onLoggedIn, onInvite }) {
   return (
     <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <form onSubmit={submit} style={{ background: COLORS.card, borderRadius: 20, padding: 26, width: "100%", maxWidth: 380, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
-        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>כניסה</div>
+        <FamilyLogo />
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6, textAlign: "center" }}>כניסה</div>
         <div style={{ color: COLORS.sub, fontSize: 13.5, marginBottom: 16 }}>הזינו את קוד הכניסה המשפחתי.</div>
         <input type="password" autoComplete="current-password" aria-label="קוד כניסה" value={pass} onChange={(e) => setPass(e.target.value)}
           style={{ width: "100%", height: 46, borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, padding: "0 12px", fontSize: 16, marginBottom: 12 }} />
@@ -854,8 +887,8 @@ function BudgetApp() {
     return (
       <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ background: COLORS.card, borderRadius: 20, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
-          <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 24, color: COLORS.ink, marginBottom: 4 }}>{householdName ? `האתר הפיננסי של ${householdName}` : "האתר הפיננסי"}</div>
-          <div style={{ color: COLORS.sub, fontSize: 14, marginBottom: 20 }}>מי אתה?</div>
+          <FamilyLogo householdName={householdName} />
+          <div style={{ color: COLORS.sub, fontSize: 14, marginBottom: 20, textAlign: "center" }}>מי אתה?</div>
           {chooserNames.length > 0 && (
             <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
               {chooserNames.map(n => (

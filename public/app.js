@@ -78,11 +78,15 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "41";
+const APP_VERSION = "42";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [{
+  v: "42",
+  date: "1.11.2026",
+  changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה"]
+}, {
   v: "40",
   date: "1.11.2026",
   changes: ["השוואה לחודש הקודם במסך הראשי: סך ההוצאות והפרש לכל קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם"]
@@ -839,6 +843,89 @@ function RingGauge({
     }
   }));
 }
+
+/* לוגו האתר במסכי הכניסה. לפני הזנת הקוד המשפחה עוד לא ידועה ולכן הנוסח כללי;
+   אחרי שהשרת מאשר את הקוד מוצג שם המשפחה: "ניהול פיננסי של משפחת …". */
+function LogoMark({
+  size = 72
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 64 64",
+    role: "img",
+    "aria-label": "לוגו ניהול פיננסי משפחתי"
+  }, /*#__PURE__*/React.createElement("rect", {
+    width: "64",
+    height: "64",
+    rx: "18",
+    fill: COLORS.sage
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M16 33 L32 20 L48 33",
+    fill: "none",
+    stroke: "#fff",
+    strokeWidth: "4",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M21 31.5 V46 H43 V31.5",
+    fill: "none",
+    stroke: "#fff",
+    strokeWidth: "4",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }), /*#__PURE__*/React.createElement("text", {
+    x: "32",
+    y: "42.5",
+    textAnchor: "middle",
+    fontSize: "14",
+    fontWeight: "800",
+    fill: COLORS.amber,
+    fontFamily: "Heebo, Assistant, sans-serif"
+  }, "₪"));
+}
+function familyDisplayName(householdName) {
+  const n = (householdName || "").trim();
+  if (!n) return "";
+  return n.startsWith("משפחת") ? n : `משפחת ${n}`;
+}
+function FamilyLogo({
+  householdName = "",
+  size = 72
+}) {
+  const fam = familyDisplayName(householdName);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: 10,
+      marginBottom: 18
+    }
+  }, /*#__PURE__*/React.createElement(LogoMark, {
+    size: size
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 800,
+      fontSize: 21,
+      color: COLORS.ink,
+      lineHeight: 1.25
+    }
+  }, "ניהול פיננסי"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 700,
+      fontSize: 15,
+      color: COLORS.sage,
+      marginTop: 2
+    }
+  }, fam ? `של ${fam}` : "משפחתי")));
+}
 function ProgressBar({
   percent,
   color
@@ -1101,13 +1188,16 @@ function OnboardingScreen({
       maxWidth: 400,
       boxShadow: "0 8px 30px rgba(20,33,61,0.08)"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(FamilyLogo, {
+    householdName: famName
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontFamily: "Heebo, sans-serif",
       fontWeight: 800,
       fontSize: 20,
       color: COLORS.ink,
-      marginBottom: 6
+      marginBottom: 6,
+      textAlign: "center"
     }
   }, "הקמת האתר של המשפחה"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1380,13 +1470,14 @@ function LoginScreen({
       maxWidth: 380,
       boxShadow: "0 8px 30px rgba(20,33,61,0.08)"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(FamilyLogo, null), /*#__PURE__*/React.createElement("div", {
     style: {
       fontFamily: "Heebo, sans-serif",
       fontWeight: 800,
       fontSize: 20,
       color: COLORS.ink,
-      marginBottom: 6
+      marginBottom: 6,
+      textAlign: "center"
     }
   }, "כניסה"), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1978,19 +2069,14 @@ function BudgetApp() {
         maxWidth: 380,
         boxShadow: "0 8px 30px rgba(20,33,61,0.08)"
       }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontFamily: "Heebo, sans-serif",
-        fontWeight: 800,
-        fontSize: 24,
-        color: COLORS.ink,
-        marginBottom: 4
-      }
-    }, householdName ? `האתר הפיננסי של ${householdName}` : "האתר הפיננסי"), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement(FamilyLogo, {
+      householdName: householdName
+    }), /*#__PURE__*/React.createElement("div", {
       style: {
         color: COLORS.sub,
         fontSize: 14,
-        marginBottom: 20
+        marginBottom: 20,
+        textAlign: "center"
       }
     }, "מי אתה?"), chooserNames.length > 0 && /*#__PURE__*/React.createElement("div", {
       style: {
