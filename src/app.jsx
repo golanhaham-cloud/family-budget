@@ -214,29 +214,31 @@ function fixedForecastItemsForMonth(fixedExpenses, mKey) {
 }
 
 /* ---------- כרטיסי אשראי (תוספתי: settings.cards, fixedExpenses[].cardId אופציונלי) ---------- */
-/* השוואה לחודש הקודם: סכום לפי קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם */
+/* השוואה לחודש הקודם. בחודש שוטף שני הצדדים נחתכים לאותם ימים (1 עד היום; בחודש קודם קצר יותר, עד סופו),
+   כך שהוצאות עתידיות בחודש הנוכחי לא נספרות. בחודש שעבר לגמרי משווים חודש מלא מול חודש מלא. */
 function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
   const prevKey = prevMonthKey(mKey);
+  const curCut = cutoffDay || 0;
+  const prevCut = curCut ? Math.min(curCut, daysInMonthKey(prevKey)) : 0;
   const sumBy = (key, maxDay) => {
-    const m = {}; let total = 0;
+    const m = {}; let total = 0, count = 0;
     (expenses || []).forEach(e => {
       if (!e.date || !e.date.startsWith(key + "-")) return;
       const day = Number(e.date.split("-")[2]);
       if (maxDay && day > maxDay) return;
       const a = Number(e.amount || 0);
-      m[e.categoryId] = (m[e.categoryId] || 0) + a; total += a;
+      m[e.categoryId] = (m[e.categoryId] || 0) + a; total += a; count++;
     });
-    return { m, total };
+    return { m, total, count };
   };
-  const cut = cutoffDay ? Math.min(cutoffDay, daysInMonthKey(prevKey)) : 0;
-  const cur = sumBy(mKey, 0), prev = sumBy(prevKey, cut), prevFull = sumBy(prevKey, 0);
+  const cur = sumBy(mKey, curCut), prev = sumBy(prevKey, prevCut), prevFull = sumBy(prevKey, 0);
   const ids = new Set([...Object.keys(cur.m), ...Object.keys(prev.m)]);
   const rows = [...ids].map(id => {
     const c = categories.find(x => x.id === id) || { name: "לא ידוע", icon: "❓" };
     const a = cur.m[id] || 0, b = prev.m[id] || 0;
     return { id, name: c.name, icon: c.icon, cur: a, prev: b, diff: a - b };
   }).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
-  return { prevKey, cut, cur: cur.total, prev: prev.total, prevFull: prevFull.total, diff: cur.total - prev.total, rows, hasPrev: prevFull.total > 0 };
+  return { prevKey, curCut, prevCut, cur: cur.total, prev: prev.total, prevFull: prevFull.total, diff: cur.total - prev.total, rows, curCount: cur.count, prevCount: prev.count, comparable: cur.count > 0 && prev.count > 0 };
 }
 
 function shiftMonthKey(mKey, delta) { const [y, m] = mKey.split("-").map(Number); return monthKey(new Date(y, m - 1 + delta, 1)); }
@@ -1350,6 +1352,7 @@ function MonthComparison({ expenses, categories, mKey, isCurrentMonth }) {
   const cutoff = isCurrentMonth ? new Date().getDate() : 0;
   const cmp = useMemo(() => compareWithPrevMonth(expenses, categories, mKey, cutoff), [expenses, categories, mKey, cutoff]);
   const prevName = monthLabelOf(cmp.prevKey);
+  const cutLabel = (c) => c === 1 ? "יום 1" : c ? `ימים 1–${c}` : "חודש מלא";
   const dirColor = (d) => d > 0 ? COLORS.coral : d < 0 ? COLORS.sage : COLORS.sub;
   const dirText = (d) => d === 0 ? "ללא שינוי" : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))} ${d > 0 ? "יותר" : "פחות"}`;
   return (
@@ -1357,26 +1360,26 @@ function MonthComparison({ expenses, categories, mKey, isCurrentMonth }) {
       <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: COLORS.card, border: "none", borderRadius: 14, padding: "13px 14px", cursor: "pointer", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14.5, color: COLORS.ink, minHeight: 44 }}>
         <span>השוואה ל{prevName}</span>
         <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {cmp.hasPrev && <span style={{ fontSize: 12.5, color: dirColor(cmp.diff) }}>{dirText(cmp.diff)}</span>}
+          {cmp.comparable && <span style={{ fontSize: 12.5, color: dirColor(cmp.diff) }}>{dirText(cmp.diff)}</span>}
           <span style={{ fontSize: 12, color: COLORS.sub }}>{open ? "הסתר ▴" : "הצג ▾"}</span>
         </span>
       </button>
       {open && (
         <div style={{ background: COLORS.card, borderRadius: 14, padding: "12px 14px", marginTop: 6 }}>
-          {!cmp.hasPrev ? (
-            <div style={{ fontSize: 13, color: COLORS.sub, textAlign: "center", padding: 8 }}>אין הוצאות רשומות ב{prevName} להשוואה</div>
+          {!cmp.comparable ? (
+            <div style={{ fontSize: 13, color: COLORS.sub, textAlign: "center", padding: 8, lineHeight: 1.6 }}>{cmp.curCount === 0 && cmp.prevCount === 0 ? `אין הוצאות רשומות להשוואה (${cutLabel(cmp.curCut)} ב${monthLabelOf(mKey)} ו${cutLabel(cmp.prevCut)} ב${prevName})` : cmp.prevCount === 0 ? `אין הוצאות רשומות ב${prevName} (${cutLabel(cmp.prevCut)}) להשוואה` : `עדיין אין הוצאות רשומות ב${monthLabelOf(mKey)} (${cutLabel(cmp.curCut)}) להשוואה`}</div>
           ) : (
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub }}>
-                <span>{monthLabelOf(mKey)}</span><b style={{ color: COLORS.ink }}>{fmt(cmp.cur)}</b>
+                <span>{monthLabelOf(mKey)} ({cutLabel(cmp.curCut)})</span><b style={{ color: COLORS.ink }}>{fmt(cmp.cur)}</b>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub, marginTop: 4 }}>
-                <span>{prevName}{cutoff ? ` (עד ה־${cmp.cut} בחודש)` : ""}</span><b style={{ color: COLORS.ink }}>{fmt(cmp.prev)}</b>
+                <span>{prevName} ({cutLabel(cmp.prevCut)})</span><b style={{ color: COLORS.ink }}>{fmt(cmp.prev)}</b>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${COLORS.mist}`, fontWeight: 700, color: dirColor(cmp.diff) }}>
                 <span>הפרש</span><span>{dirText(cmp.diff)}</span>
               </div>
-              {cutoff ? <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>ההשוואה עד אותו יום בחודש, כדי שחודש חלקי לא ייראה נמוך. סך {prevName} המלא: {fmt(cmp.prevFull)}.</div> : null}
+              {cutoff ? <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>החודש עוד לא נגמר, לכן משווים את אותם ימים בשני החודשים. הוצאות עם תאריך עתידי לא נכללות. סך {prevName} המלא: {fmt(cmp.prevFull)}.</div> : null}
               <div style={{ marginTop: 10 }}>
                 {cmp.rows.map(r => (
                   <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${COLORS.mist}`, fontSize: 13 }}>

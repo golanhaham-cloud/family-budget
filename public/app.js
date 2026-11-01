@@ -454,12 +454,16 @@ function fixedForecastItemsForMonth(fixedExpenses, mKey) {
 }
 
 /* ---------- כרטיסי אשראי (תוספתי: settings.cards, fixedExpenses[].cardId אופציונלי) ---------- */
-/* השוואה לחודש הקודם: סכום לפי קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם */
+/* השוואה לחודש הקודם. בחודש שוטף שני הצדדים נחתכים לאותם ימים (1 עד היום; בחודש קודם קצר יותר, עד סופו),
+   כך שהוצאות עתידיות בחודש הנוכחי לא נספרות. בחודש שעבר לגמרי משווים חודש מלא מול חודש מלא. */
 function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
   const prevKey = prevMonthKey(mKey);
+  const curCut = cutoffDay || 0;
+  const prevCut = curCut ? Math.min(curCut, daysInMonthKey(prevKey)) : 0;
   const sumBy = (key, maxDay) => {
     const m = {};
-    let total = 0;
+    let total = 0,
+      count = 0;
     (expenses || []).forEach(e => {
       if (!e.date || !e.date.startsWith(key + "-")) return;
       const day = Number(e.date.split("-")[2]);
@@ -467,15 +471,16 @@ function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
       const a = Number(e.amount || 0);
       m[e.categoryId] = (m[e.categoryId] || 0) + a;
       total += a;
+      count++;
     });
     return {
       m,
-      total
+      total,
+      count
     };
   };
-  const cut = cutoffDay ? Math.min(cutoffDay, daysInMonthKey(prevKey)) : 0;
-  const cur = sumBy(mKey, 0),
-    prev = sumBy(prevKey, cut),
+  const cur = sumBy(mKey, curCut),
+    prev = sumBy(prevKey, prevCut),
     prevFull = sumBy(prevKey, 0);
   const ids = new Set([...Object.keys(cur.m), ...Object.keys(prev.m)]);
   const rows = [...ids].map(id => {
@@ -496,13 +501,16 @@ function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
   }).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
   return {
     prevKey,
-    cut,
+    curCut,
+    prevCut,
     cur: cur.total,
     prev: prev.total,
     prevFull: prevFull.total,
     diff: cur.total - prev.total,
     rows,
-    hasPrev: prevFull.total > 0
+    curCount: cur.count,
+    prevCount: prev.count,
+    comparable: cur.count > 0 && prev.count > 0
   };
 }
 function shiftMonthKey(mKey, delta) {
@@ -3605,6 +3613,7 @@ function MonthComparison({
   const cutoff = isCurrentMonth ? new Date().getDate() : 0;
   const cmp = useMemo(() => compareWithPrevMonth(expenses, categories, mKey, cutoff), [expenses, categories, mKey, cutoff]);
   const prevName = monthLabelOf(cmp.prevKey);
+  const cutLabel = c => c === 1 ? "יום 1" : c ? `ימים 1–${c}` : "חודש מלא";
   const dirColor = d => d > 0 ? COLORS.coral : d < 0 ? COLORS.sage : COLORS.sub;
   const dirText = d => d === 0 ? "ללא שינוי" : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))} ${d > 0 ? "יותר" : "פחות"}`;
   return /*#__PURE__*/React.createElement("div", {
@@ -3636,7 +3645,7 @@ function MonthComparison({
       alignItems: "center",
       gap: 8
     }
-  }, cmp.hasPrev && /*#__PURE__*/React.createElement("span", {
+  }, cmp.comparable && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 12.5,
       color: dirColor(cmp.diff)
@@ -3653,21 +3662,22 @@ function MonthComparison({
       padding: "12px 14px",
       marginTop: 6
     }
-  }, !cmp.hasPrev ? /*#__PURE__*/React.createElement("div", {
+  }, !cmp.comparable ? /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 13,
       color: COLORS.sub,
       textAlign: "center",
-      padding: 8
+      padding: 8,
+      lineHeight: 1.6
     }
-  }, "אין הוצאות רשומות ב", prevName, " להשוואה") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, cmp.curCount === 0 && cmp.prevCount === 0 ? `אין הוצאות רשומות להשוואה (${cutLabel(cmp.curCut)} ב${monthLabelOf(mKey)} ו${cutLabel(cmp.prevCut)} ב${prevName})` : cmp.prevCount === 0 ? `אין הוצאות רשומות ב${prevName} (${cutLabel(cmp.prevCut)}) להשוואה` : `עדיין אין הוצאות רשומות ב${monthLabelOf(mKey)} (${cutLabel(cmp.curCut)}) להשוואה`) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
       fontSize: 13,
       color: COLORS.sub
     }
-  }, /*#__PURE__*/React.createElement("span", null, monthLabelOf(mKey)), /*#__PURE__*/React.createElement("b", {
+  }, /*#__PURE__*/React.createElement("span", null, monthLabelOf(mKey), " (", cutLabel(cmp.curCut), ")"), /*#__PURE__*/React.createElement("b", {
     style: {
       color: COLORS.ink
     }
@@ -3679,7 +3689,7 @@ function MonthComparison({
       color: COLORS.sub,
       marginTop: 4
     }
-  }, /*#__PURE__*/React.createElement("span", null, prevName, cutoff ? ` (עד ה־${cmp.cut} בחודש)` : ""), /*#__PURE__*/React.createElement("b", {
+  }, /*#__PURE__*/React.createElement("span", null, prevName, " (", cutLabel(cmp.prevCut), ")"), /*#__PURE__*/React.createElement("b", {
     style: {
       color: COLORS.ink
     }
@@ -3701,7 +3711,7 @@ function MonthComparison({
       marginTop: 6,
       lineHeight: 1.5
     }
-  }, "ההשוואה עד אותו יום בחודש, כדי שחודש חלקי לא ייראה נמוך. סך ", prevName, " המלא: ", fmt(cmp.prevFull), ".") : null, /*#__PURE__*/React.createElement("div", {
+  }, "החודש עוד לא נגמר, לכן משווים את אותם ימים בשני החודשים. הוצאות עם תאריך עתידי לא נכללות. סך ", prevName, " המלא: ", fmt(cmp.prevFull), ".") : null, /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 10
     }
