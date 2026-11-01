@@ -1,9 +1,9 @@
-const CACHE_NAME = "family-budget-cache-v5";
-const APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
+const CACHE_NAME = "family-budget-cache-v6";
+const APP_SHELL = ["/", "/index.html", "/app.js", "/vendor/react.production.min.js", "/vendor/react-dom.production.min.js", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_NAME).then((cache) => Promise.allSettled(APP_SHELL.map((u) => cache.add(u))))
   );
   self.skipWaiting();
 });
