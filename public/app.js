@@ -85,7 +85,7 @@ const APP_CREDIT = "נבנה על ידי גולן חכם";
 const RELEASES = [{
   v: "42",
   date: "1.11.2026",
-  changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה"]
+  changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה; כשלא הוגדר שם משפחה הנוסח נשאר כללי"]
 }, {
   v: "40",
   date: "1.11.2026",
@@ -884,9 +884,10 @@ function LogoMark({
     fontFamily: "Heebo, Assistant, sans-serif"
   }, "₪"));
 }
+// "המשפחה שלי" היא ברירת המחדל בצד שרת כשלא הוגדר שם (BUDGET_MAIN_NAME) - נתייחס אליה כאל שם שלא הוגדר.
 function familyDisplayName(householdName) {
   const n = (householdName || "").trim();
-  if (!n) return "";
+  if (!n || n === "המשפחה שלי") return "";
   return n.startsWith("משפחת") ? n : `משפחת ${n}`;
 }
 function FamilyLogo({
