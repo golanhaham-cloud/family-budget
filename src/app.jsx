@@ -39,7 +39,7 @@ function statusColor(p) { if (p >= 90) return COLORS.coral; if (p >= 70) return 
 /* ---------- התראות תקציב (השוואה באגורות, לפי הדיוק הכספי של המערכת) ---------- */
 const NEAR_BUDGET_PCT = 80; // סף ההתקרבות הקיים
 const toAgorot = (v) => Math.round((Number(v) || 0) * 100); // מנרמל שגיאות נקודה צפה (0.1+0.2) בלי לשנות את הסכום השמור
-const round2 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round((n + Number.EPSILON) * 100) / 100 : 0; }; // סכומים נשמרים מעוגלים לשתי ספרות (אגורות), בלי שאריות נקודה צפה
+const round2 = (v) => { const n = Number(v); if (!Number.isFinite(n)) return 0; const s = n * 100; return Math.round(s + Math.sign(s) * Number.EPSILON * Math.max(100, Math.abs(s))) / 100; }; // עיגול לאגורות, חצי אגורה ומעלה מעוגל כלפי חוץ (1.005→1.01, 2.675→2.68, -2.675→-2.68); התיקון מתבצע לאחר ההזזה לאגורות ופרופורציונלי לגודל, כדי לגבור על שגיאת ייצוג בינארי בכל סדר גודל (555.555→555.56)
 function fmtAgorot(ag) {
   if (ag > 0 && ag < 100) return "פחות מ־1 ₪";
   return `${(ag / 100).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ₪`;
@@ -1762,6 +1762,17 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     return { ...r, openingForMonth, running, timeline, minBal, minDay, runPartial };
   });
 
+  // סיווג ירידה למינוס לכל חודש: cross = חציית אפס, deep = שפל נמוך משפל החודש הקודם (המינוס מעמיק),
+  // recover = נסיגה מהמינוס עד לפלוס בסוף החודש, shrink = המינוס נשאר אבל מתכווץ
+  let prevMin = null;
+  rows.forEach(r => {
+    r.dipKind = r.minBal >= 0 ? null
+      : r.openingForMonth >= 0 ? "cross"
+      : r.minBal < (prevMin != null ? prevMin : r.openingForMonth) ? "deep"
+      : r.running >= 0 ? "recover" : "shrink";
+    prevMin = r.minBal;
+  });
+
   const addIncomeHere = (mKey) => {
     if (!srcDraft.trim() || !Number(amtDraft)) return;
     onAddIncome(mKey, srcDraft.trim(), Number(amtDraft), Number(dayDraft) || 1);
@@ -1793,8 +1804,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
 
       {(rows.some(r => r.partial) || rows.some(r => r.minBal < 0)) && (() => {
         const negRows = rows.filter(r => r.minBal < 0);
-        const crossRows = negRows.filter(r => r.openingForMonth >= 0);
-        const deepRows = negRows.filter(r => r.openingForMonth < 0 && r.minBal < r.openingForMonth);
+        const crossRows = negRows.filter(r => r.dipKind === "cross");
+        const deepRows = negRows.filter(r => r.dipKind === "deep");
         const anyPartial = rows.some(r => r.partial);
         const worst = negRows.reduce((a, b) => (b.minBal < a.minBal ? b : a), negRows[0] || null);
         const dipSummary = crossRows.length === 1 && deepRows.length === 0
@@ -1817,7 +1828,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
                   <div>⚠️ חלק מהיתרות חלקיות: יש הוצאות קבועות באשראי של כרטיסים שטרם הוגדר להם יום חיוב או חודש חיוב. הסכומים מוצגים בנפרד בפירוט החודש ("טרם שובץ לתזרים") ואינם כלולים ביתרה.</div>
                 )}
                 {negRows.map(r => (
-                  <div key={r.key} style={{ color: COLORS.coral }}>⚠️ {r.label}: {r.openingForMonth >= 0 ? "ירידה צפויה למינוס" : r.minBal < r.openingForMonth ? "המינוס מעמיק" : "היתרה במינוס"} עד {fmt(r.minBal)} ביום {r.minDay} לחודש{r.runPartial ? " (חלקי)" : ""}{r.openingForMonth >= 0 ? " — לפני שהיא מתאזנת בסוף החודש" : ""}</div>
+                  <div key={r.key} style={{ color: COLORS.coral }}>⚠️ {r.label}: {r.dipKind === "cross" ? `ירידה צפויה למינוס, עד ${fmt(r.minBal)} ביום ${r.minDay} לחודש${r.running >= 0 ? " — מתאזנת עד סוף החודש" : " — וגם סוף החודש נשאר במינוס"}` : r.dipKind === "deep" ? `המינוס מעמיק, עד ${fmt(r.minBal)} ביום ${r.minDay} לחודש` : r.dipKind === "recover" ? `התאוששות מהמינוס — שפל ${fmt(r.minBal)} ביום ${r.minDay} לחודש, חזרה לפלוס עד סוף החודש` : `המינוס מתכווץ — שפל ${fmt(r.minBal)} ביום ${r.minDay} לחודש`}{r.runPartial ? " (חלקי)" : ""}</div>
                 ))}
               </div>
             )}
@@ -1844,8 +1855,8 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
               <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 13.5 }}>{r.label}{r.isAnchorMonth && anchorInfo ? ` · מ־${anchorInfo.day} בחודש` : ""}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 3, flexWrap: "wrap" }}>
                 {r.isAnchorMonth && anchorInfo && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "2px 6px" }}>יתרה מתחילת {anchorInfo.dateLabel}</span>}
-                {r.openingForMonth >= 0 && r.minBal < 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
-                {r.openingForMonth < 0 && r.minBal < r.openingForMonth && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>המינוס מעמיק</span>}
+                {r.dipKind === "cross" && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>ירידה למינוס</span>}
+                {r.dipKind === "deep" && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.coral, background: COLORS.coralLight, borderRadius: 6, padding: "2px 6px" }}>המינוס מעמיק</span>}
               </div>
             </div>
             <div style={{ width: 80, textAlign: "left", flexShrink: 0, fontSize: 12.5, fontWeight: 700, color: r.balance >= 0 ? COLORS.sage : COLORS.coral }}>{r.balance >= 0 ? "+" : ""}{fmt(r.balance)}</div>
