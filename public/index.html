@@ -81,7 +81,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "35";
+const APP_VERSION = "36";
 const APP_VERSION_DATE = "1.11.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
@@ -548,7 +548,7 @@ function BudgetApp() {
   const isCurrentMonth = mKey === monthKey(now);
   const dim = daysInMonth(monthDate);
   const daysPassed = isCurrentMonth ? now.getDate() : dim;
-  const daysLeft = isCurrentMonth ? dim - now.getDate() : 0;
+  const daysLeft = isCurrentMonth ? dim - now.getDate() + 1 : 0; // כולל היום הנוכחי: ביום האחרון בחודש נותר יום 1
   const timePct = (daysPassed / dim) * 100;
   const projected = daysPassed > 0 ? (totalSpent / daysPassed) * dim : 0;
   const paceHigh = totalBudget > 0 && overallPct - timePct > 12 && isCurrentMonth;
@@ -565,8 +565,10 @@ function BudgetApp() {
 
   const copyPrevBudget = async () => {
     const prev = new Date(monthDate); prev.setMonth(prev.getMonth() - 1);
-    const prevBudget = data.budgets[monthKey(prev)];
-    if (!prevBudget) { showToast("אין תקציב לחודש הקודם"); return; }
+    // החודש הקודם עצמו יכול לרשת תקציב מחודש מוקדם יותר - מעתיקים את החלוקה האפקטיבית שלו, לא רק רשומה מפורשת
+    const prevInfo = budgetsForMonth(data.budgets, monthKey(prev));
+    const prevBudget = prevInfo.map;
+    if (!prevBudget || Object.keys(prevBudget).length === 0) { showToast("אין תקציב לחודש הקודם"); return; }
     if (await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...prevBudget } } })) showToast("התקציב הועתק מהחודש הקודם");
   };
   const setCategoryBudget = async (catId, amount) => {
@@ -1301,7 +1303,11 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
   const [pName, setPName] = useState("");
   const [pAmount, setPAmount] = useState("");
   const [pDate, setPDate] = useState(todayISO());
-  const upcomingPlanned = plannedExpenses.filter(p => p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date));
+  const plannedDateOk = (p) => typeof p.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.date);
+  const upcomingPlanned = plannedExpenses.filter(p => plannedDateOk(p) && p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date));
+  // מתוכננות שעברו (או בלי תאריך תקין) נשמרות גלויות וניתנות למחיקה, במקום להיעלם מהממשק
+  const pastPlanned = plannedExpenses.filter(p => !plannedDateOk(p) || p.date < mKey + "-01").sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const [showPastPlanned, setShowPastPlanned] = useState(false);
   const resetPlanned = () => { setPName(""); setPAmount(""); setPDate(todayISO()); setAddingPlanned(false); };
 
   const renderFixedFull = (f, i, list) => (
@@ -1401,7 +1407,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
       )}
       <div style={{ fontSize: 11, color: COLORS.sub, margin: "-8px 2px 12px" }}>💳 = ההוצאה מחויבת באשראי ותשתקף בתחזית בחודש שאחרי, לא בחודש בו היא בוצעה</div>
       <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 14px", fontSize: 13.5 }}>
-        <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות בחודש הנוכחי</span>
+        <span style={{ color: COLORS.sub }}>סה"כ הוצאות קבועות ב{monthLabelOf(mKey)}</span>
         <span style={{ fontWeight: 800, fontFamily: "Heebo, sans-serif" }}>{fmt(total)}</span>
       </div>
 
@@ -1469,6 +1475,25 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
         ))}
       </div>
 
+      {pastPlanned.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <button onClick={() => setShowPastPlanned(v => !v)} aria-expanded={showPastPlanned} style={{ border: "none", background: "none", fontSize: 13, fontWeight: 700, color: COLORS.sub, cursor: "pointer", minHeight: 40, padding: "0 2px" }}>
+            {showPastPlanned ? "▴" : "▾"} מתוכננות שעברו ({pastPlanned.length})
+          </button>
+          {showPastPlanned && <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", opacity: 0.9 }}>{pastPlanned.map((p, i) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === pastPlanned.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
+              <div style={{ fontSize: 18 }}>📌</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</div>
+                <div style={{ fontSize: 11, color: COLORS.sub }}>{plannedDateOk(p) ? p.date.split("-").reverse().join("/") : "ללא תאריך"}</div>
+              </div>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmt(p.amount)}</div>
+              <button onClick={() => onRemovePlanned(p.id)} aria-label={"מחיקת " + (p.name || "הוצאה מתוכננת")} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+            </div>
+          ))}</div>}
+        </div>
+      )}
+
       {!addingPlanned ? (
         <button onClick={() => setAddingPlanned(true)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px dashed ${COLORS.sage}`, background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer" }}>＋ הוספת הוצאה מתוכננת</button>
       ) : (
@@ -1487,7 +1512,7 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={resetPlanned} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
-            <button disabled={!pName.trim() || !Number(pAmount)} onClick={() => { onAddPlanned(pName.trim(), Number(pAmount), pDate); resetPlanned(); }}
+            <button disabled={!pName.trim() || !Number(pAmount) || !/^\d{4}-\d{2}-\d{2}$/.test(pDate || "")} onClick={() => { onAddPlanned(pName.trim(), Number(pAmount), pDate); resetPlanned(); }}
               style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
           </div>
         </div>
@@ -2393,7 +2418,7 @@ function ExpenseModal({ categories, user, initial, onClose, onSave, onDelete }) 
   const [date, setDate] = useState(initial?.date ?? todayISO());
   const [description, setDescription] = useState(initial?.description ?? "");
   const [who, setWho] = useState(initial?.user ?? user);
-  const canSave = Number(amount) > 0 && categoryId;
+  const canSave = Number(amount) > 0 && categoryId && /^\d{4}-\d{2}-\d{2}$/.test(date || "");
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,33,61,0.4)", zIndex: 60, display: "flex", alignItems: "flex-end" }} onClick={onClose}>
