@@ -7751,6 +7751,7 @@ function BudgetTab({
     }
   }) : /*#__PURE__*/React.createElement("span", {
     onClick: () => setEditingId(c.id),
+    role: "button",
     style: {
       flex: 1,
       fontSize: 13.5,

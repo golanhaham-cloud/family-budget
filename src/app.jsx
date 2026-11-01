@@ -2753,7 +2753,7 @@ function BudgetTab({ categories, monthBudgets, budgetInfo, onSetBudget, onAddCat
               <input autoFocus defaultValue={c.name} onBlur={(e) => { onUpdateCategory(c.id, { name: e.target.value || c.name }); setEditingId(null); }}
                 onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} style={{ flex: 1, padding: "5px 8px", borderRadius: 7, border: `1px solid ${COLORS.mist}`, fontSize: 13 }} />
             ) : (
-              <span onClick={() => setEditingId(c.id)} style={{ flex: 1, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>{c.name}</span>
+              <span onClick={() => setEditingId(c.id)} role="button" style={{ flex: 1, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>{c.name}</span>
             )}
             <input key={c.id + "-" + (explicit ? "exp" : "inh")} type="number" placeholder={explicit ? "0" : String(Number(effectiveMap[c.id]) || 0)} defaultValue={explicit ? (monthBudgets[c.id] || "") : ""} onBlur={(e) => {
               const raw = e.target.value.trim();

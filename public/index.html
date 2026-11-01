@@ -27,6 +27,9 @@
   button:active { transform: scale(0.95); opacity: 0.85; }
   [role="button"]:active { opacity: 0.6; }
   button:disabled:active { transform: none; opacity: 0.5; }
+  @media (prefers-reduced-motion: reduce) {
+    button, [role="button"] { transition: none; }
+  }
   html, body { margin: 0; padding: 0; }
   body { font-family: 'Assistant', sans-serif; background: #F3F6F4; -webkit-tap-highlight-color: transparent; }
   input, select { font-family: 'Assistant', sans-serif; }
