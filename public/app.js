@@ -78,11 +78,15 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "39";
+const APP_VERSION = "40";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [{
+  v: "40",
+  date: "1.11.2026",
+  changes: ["השוואה לחודש הקודם במסך הראשי: סך ההוצאות והפרש לכל קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם"]
+}, {
   v: "39",
   date: "1.11.2026",
   changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"]
@@ -450,6 +454,57 @@ function fixedForecastItemsForMonth(fixedExpenses, mKey) {
 }
 
 /* ---------- כרטיסי אשראי (תוספתי: settings.cards, fixedExpenses[].cardId אופציונלי) ---------- */
+/* השוואה לחודש הקודם: סכום לפי קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם */
+function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
+  const prevKey = prevMonthKey(mKey);
+  const sumBy = (key, maxDay) => {
+    const m = {};
+    let total = 0;
+    (expenses || []).forEach(e => {
+      if (!e.date || !e.date.startsWith(key + "-")) return;
+      const day = Number(e.date.split("-")[2]);
+      if (maxDay && day > maxDay) return;
+      const a = Number(e.amount || 0);
+      m[e.categoryId] = (m[e.categoryId] || 0) + a;
+      total += a;
+    });
+    return {
+      m,
+      total
+    };
+  };
+  const cut = cutoffDay ? Math.min(cutoffDay, daysInMonthKey(prevKey)) : 0;
+  const cur = sumBy(mKey, 0),
+    prev = sumBy(prevKey, cut),
+    prevFull = sumBy(prevKey, 0);
+  const ids = new Set([...Object.keys(cur.m), ...Object.keys(prev.m)]);
+  const rows = [...ids].map(id => {
+    const c = categories.find(x => x.id === id) || {
+      name: "לא ידוע",
+      icon: "❓"
+    };
+    const a = cur.m[id] || 0,
+      b = prev.m[id] || 0;
+    return {
+      id,
+      name: c.name,
+      icon: c.icon,
+      cur: a,
+      prev: b,
+      diff: a - b
+    };
+  }).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+  return {
+    prevKey,
+    cut,
+    cur: cur.total,
+    prev: prev.total,
+    prevFull: prevFull.total,
+    diff: cur.total - prev.total,
+    rows,
+    hasPrev: prevFull.total > 0
+  };
+}
 function shiftMonthKey(mKey, delta) {
   const [y, m] = mKey.split("-").map(Number);
   return monthKey(new Date(y, m - 1 + delta, 1));
@@ -2069,8 +2124,9 @@ function BudgetApp() {
     perCategory: perCategory,
     alerts: alerts,
     expenses: monthExpenses,
-    categories: activeCategories,
+    categories: data.categories,
     dim: dim,
+    mKey: mKey,
     allExpenses: data.expenses,
     settings: data.settings,
     fixedExpenses: data.fixedExpenses,
@@ -3218,6 +3274,7 @@ function Dashboard({
   expenses,
   categories,
   dim,
+  mKey,
   onEditExpense,
   onDeleteExpense,
   onShowAllExpenses,
@@ -3375,6 +3432,11 @@ function Dashboard({
     realNowKey: realNowKey
   }), /*#__PURE__*/React.createElement(AttentionList, {
     alerts: alerts
+  }), /*#__PURE__*/React.createElement(MonthComparison, {
+    expenses: allExpenses,
+    categories: categories,
+    mKey: mKey,
+    isCurrentMonth: isCurrentMonth
   }), /*#__PURE__*/React.createElement("button", {
     onClick: () => setDetailOpen(o => !o),
     "aria-expanded": detailOpen,
@@ -3532,6 +3594,155 @@ function Dashboard({
       minHeight: 44
     }
   }, "כל ההוצאות ‹"));
+}
+function MonthComparison({
+  expenses,
+  categories,
+  mKey,
+  isCurrentMonth
+}) {
+  const [open, setOpen] = useState(false);
+  const cutoff = isCurrentMonth ? new Date().getDate() : 0;
+  const cmp = useMemo(() => compareWithPrevMonth(expenses, categories, mKey, cutoff), [expenses, categories, mKey, cutoff]);
+  const prevName = monthLabelOf(cmp.prevKey);
+  const dirColor = d => d > 0 ? COLORS.coral : d < 0 ? COLORS.sage : COLORS.sub;
+  const dirText = d => d === 0 ? "ללא שינוי" : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))} ${d > 0 ? "יותר" : "פחות"}`;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setOpen(o => !o),
+    "aria-expanded": open,
+    style: {
+      width: "100%",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      background: COLORS.card,
+      border: "none",
+      borderRadius: 14,
+      padding: "13px 14px",
+      cursor: "pointer",
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 700,
+      fontSize: 14.5,
+      color: COLORS.ink,
+      minHeight: 44
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "השוואה ל", prevName), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, cmp.hasPrev && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      color: dirColor(cmp.diff)
+    }
+  }, dirText(cmp.diff)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: COLORS.sub
+    }
+  }, open ? "הסתר ▴" : "הצג ▾"))), open && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 14,
+      padding: "12px 14px",
+      marginTop: 6
+    }
+  }, !cmp.hasPrev ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: COLORS.sub,
+      textAlign: "center",
+      padding: 8
+    }
+  }, "אין הוצאות רשומות ב", prevName, " להשוואה") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 13,
+      color: COLORS.sub
+    }
+  }, /*#__PURE__*/React.createElement("span", null, monthLabelOf(mKey)), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: COLORS.ink
+    }
+  }, fmt(cmp.cur))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 13,
+      color: COLORS.sub,
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", null, prevName, cutoff ? ` (עד ה־${cmp.cut} בחודש)` : ""), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: COLORS.ink
+    }
+  }, fmt(cmp.prev))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 14,
+      marginTop: 6,
+      paddingTop: 6,
+      borderTop: `1px solid ${COLORS.mist}`,
+      fontWeight: 700,
+      color: dirColor(cmp.diff)
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "הפרש"), /*#__PURE__*/React.createElement("span", null, dirText(cmp.diff))), cutoff ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: COLORS.sub,
+      marginTop: 6,
+      lineHeight: 1.5
+    }
+  }, "ההשוואה עד אותו יום בחודש, כדי שחודש חלקי לא ייראה נמוך. סך ", prevName, " המלא: ", fmt(cmp.prevFull), ".") : null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, cmp.rows.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "8px 0",
+      borderTop: `1px solid ${COLORS.mist}`,
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16
+    }
+  }, r.icon), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      fontWeight: 600
+    }
+  }, r.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.sub,
+      fontSize: 11.5,
+      whiteSpace: "nowrap"
+    }
+  }, fmt(r.cur), " לעומת ", fmt(r.prev)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      minWidth: 96,
+      textAlign: "end",
+      fontWeight: 700,
+      color: dirColor(r.diff),
+      whiteSpace: "nowrap"
+    }
+  }, dirText(r.diff))))))));
 }
 function Row({
   label,

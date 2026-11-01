@@ -25,11 +25,12 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "39";
+const APP_VERSION = "40";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [
+  { v: "40", date: "1.11.2026", changes: ["השוואה לחודש הקודם במסך הראשי: סך ההוצאות והפרש לכל קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם"] },
   { v: "39", date: "1.11.2026", changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"] },
   { v: "38", date: "1.11.2026", changes: ["קרדיט לגולן חכם באתר", "מסך גרסאות עם מספר הגרסה ופירוט השינויים"] },
   { v: "37", date: "1.11.2026", changes: ["ניסוח מדויק בתחזית: כניסה למינוס, העמקה או התאוששות", "אפשרות להוצאה שנתית", "כפתור יציאה בתפריט \"עוד\"", "חסימת יום לא תקין בחודש", "בחירת שנים עד 2040", "עיגול סכומים לאגורות", "חיזוק אבטחה: הקוד נבנה מראש ומוגש מקומית"] },
@@ -213,6 +214,31 @@ function fixedForecastItemsForMonth(fixedExpenses, mKey) {
 }
 
 /* ---------- כרטיסי אשראי (תוספתי: settings.cards, fixedExpenses[].cardId אופציונלי) ---------- */
+/* השוואה לחודש הקודם: סכום לפי קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם */
+function compareWithPrevMonth(expenses, categories, mKey, cutoffDay) {
+  const prevKey = prevMonthKey(mKey);
+  const sumBy = (key, maxDay) => {
+    const m = {}; let total = 0;
+    (expenses || []).forEach(e => {
+      if (!e.date || !e.date.startsWith(key + "-")) return;
+      const day = Number(e.date.split("-")[2]);
+      if (maxDay && day > maxDay) return;
+      const a = Number(e.amount || 0);
+      m[e.categoryId] = (m[e.categoryId] || 0) + a; total += a;
+    });
+    return { m, total };
+  };
+  const cut = cutoffDay ? Math.min(cutoffDay, daysInMonthKey(prevKey)) : 0;
+  const cur = sumBy(mKey, 0), prev = sumBy(prevKey, cut), prevFull = sumBy(prevKey, 0);
+  const ids = new Set([...Object.keys(cur.m), ...Object.keys(prev.m)]);
+  const rows = [...ids].map(id => {
+    const c = categories.find(x => x.id === id) || { name: "לא ידוע", icon: "❓" };
+    const a = cur.m[id] || 0, b = prev.m[id] || 0;
+    return { id, name: c.name, icon: c.icon, cur: a, prev: b, diff: a - b };
+  }).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+  return { prevKey, cut, cur: cur.total, prev: prev.total, prevFull: prevFull.total, diff: cur.total - prev.total, rows, hasPrev: prevFull.total > 0 };
+}
+
 function shiftMonthKey(mKey, delta) { const [y, m] = mKey.split("-").map(Number); return monthKey(new Date(y, m - 1 + delta, 1)); }
 // כרטיס "שלם" רק אם הוגדרו במפורש גם יום חיוב (1-31) וגם lag (0-6 חודשים אחרי חודש ההוצאה). אין ברירות מחדל.
 function isCardComplete(c) {
@@ -860,7 +886,7 @@ function BudgetApp() {
         {tab === "dashboard" && (
           <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct} budgetSourceLabel={budgetSourceLabel}
             daysLeft={daysLeft} isCurrentMonth={isCurrentMonth} projected={projected} paceHigh={paceHigh}
-            perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={activeCategories} dim={dim}
+            perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={data.categories} dim={dim} mKey={mKey}
             allExpenses={data.expenses} settings={data.settings} fixedExpenses={data.fixedExpenses} realNowKey={monthKey(now)}
             onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} onShowAllExpenses={() => setTab("expenses")} />
         )}
@@ -1214,7 +1240,7 @@ function DataStatusStrip({ settings, fixedExpenses, realNowKey }) {
   );
 }
 
-function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, onShowAllExpenses, budgetSourceLabel, allExpenses, settings, fixedExpenses, realNowKey }) {
+function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, mKey, onEditExpense, onDeleteExpense, onShowAllExpenses, budgetSourceLabel, allExpenses, settings, fixedExpenses, realNowKey }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const gaugeColor = statusColor(overallPct);
   const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 3);
@@ -1277,6 +1303,8 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
 
       <AttentionList alerts={alerts} />
 
+      <MonthComparison expenses={allExpenses} categories={categories} mKey={mKey} isCurrentMonth={isCurrentMonth} />
+
       <button onClick={() => setDetailOpen(o => !o)} aria-expanded={detailOpen} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: COLORS.card, border: "none", borderRadius: 14, padding: "13px 14px", marginBottom: 14, cursor: "pointer", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14.5, color: COLORS.ink, minHeight: 44 }}>
         <span>פירוט לפי קטגוריה וגרפים</span><span style={{ fontSize: 12, color: COLORS.sub }}>{detailOpen ? "הסתר ▴" : "הצג ▾"}</span>
       </button>
@@ -1314,6 +1342,55 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
         {recent.map((e, i) => <ExpenseRow key={e.id} exp={e} categories={categories} last={i === recent.length - 1} onEdit={onEditExpense} onDelete={onDeleteExpense} />)}
       </div>
       <button onClick={onShowAllExpenses} style={{ width: "100%", border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 14, cursor: "pointer", padding: "0 0 20px", minHeight: 44 }}>כל ההוצאות ‹</button>
+    </div>
+  );
+}
+function MonthComparison({ expenses, categories, mKey, isCurrentMonth }) {
+  const [open, setOpen] = useState(false);
+  const cutoff = isCurrentMonth ? new Date().getDate() : 0;
+  const cmp = useMemo(() => compareWithPrevMonth(expenses, categories, mKey, cutoff), [expenses, categories, mKey, cutoff]);
+  const prevName = monthLabelOf(cmp.prevKey);
+  const dirColor = (d) => d > 0 ? COLORS.coral : d < 0 ? COLORS.sage : COLORS.sub;
+  const dirText = (d) => d === 0 ? "ללא שינוי" : `${d > 0 ? "▲" : "▼"} ${fmt(Math.abs(d))} ${d > 0 ? "יותר" : "פחות"}`;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: COLORS.card, border: "none", borderRadius: 14, padding: "13px 14px", cursor: "pointer", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14.5, color: COLORS.ink, minHeight: 44 }}>
+        <span>השוואה ל{prevName}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {cmp.hasPrev && <span style={{ fontSize: 12.5, color: dirColor(cmp.diff) }}>{dirText(cmp.diff)}</span>}
+          <span style={{ fontSize: 12, color: COLORS.sub }}>{open ? "הסתר ▴" : "הצג ▾"}</span>
+        </span>
+      </button>
+      {open && (
+        <div style={{ background: COLORS.card, borderRadius: 14, padding: "12px 14px", marginTop: 6 }}>
+          {!cmp.hasPrev ? (
+            <div style={{ fontSize: 13, color: COLORS.sub, textAlign: "center", padding: 8 }}>אין הוצאות רשומות ב{prevName} להשוואה</div>
+          ) : (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub }}>
+                <span>{monthLabelOf(mKey)}</span><b style={{ color: COLORS.ink }}>{fmt(cmp.cur)}</b>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub, marginTop: 4 }}>
+                <span>{prevName}{cutoff ? ` (עד ה־${cmp.cut} בחודש)` : ""}</span><b style={{ color: COLORS.ink }}>{fmt(cmp.prev)}</b>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${COLORS.mist}`, fontWeight: 700, color: dirColor(cmp.diff) }}>
+                <span>הפרש</span><span>{dirText(cmp.diff)}</span>
+              </div>
+              {cutoff ? <div style={{ fontSize: 11.5, color: COLORS.sub, marginTop: 6, lineHeight: 1.5 }}>ההשוואה עד אותו יום בחודש, כדי שחודש חלקי לא ייראה נמוך. סך {prevName} המלא: {fmt(cmp.prevFull)}.</div> : null}
+              <div style={{ marginTop: 10 }}>
+                {cmp.rows.map(r => (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: `1px solid ${COLORS.mist}`, fontSize: 13 }}>
+                    <span style={{ fontSize: 16 }}>{r.icon}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }}>{r.name}</span>
+                    <span style={{ color: COLORS.sub, fontSize: 11.5, whiteSpace: "nowrap" }}>{fmt(r.cur)} לעומת {fmt(r.prev)}</span>
+                    <span style={{ minWidth: 96, textAlign: "end", fontWeight: 700, color: dirColor(r.diff), whiteSpace: "nowrap" }}>{dirText(r.diff)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
