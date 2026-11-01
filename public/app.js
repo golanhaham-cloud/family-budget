@@ -78,8 +78,63 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "37";
+const APP_VERSION = "38";
 const APP_VERSION_DATE = "1.11.2026";
+const APP_CREDIT = "נבנה על ידי גולן חכם";
+/* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
+const RELEASES = [{
+  v: "38",
+  date: "1.11.2026",
+  changes: ["קרדיט לגולן חכם באתר", "מסך גרסות עם מספר הגרסה ופירוט השינויים"]
+}, {
+  v: "37",
+  date: "1.11.2026",
+  changes: ["ניסוח מדויק בתחזית: כניסה למינוס, העמקה או התאוששות", "אפשרות להוצאה שנתית", "כפתור יציאה בתפריט \"עוד\"", "חסימת יום לא תקין בחודש", "בחירת שנים עד 2040", "עיגול סכומים לאגורות", "חיזוק אבטחה: הקוד נבנה מראש ומוגש מקומית"]
+}, {
+  v: "36",
+  date: "1.11.2026",
+  changes: ["העתקת תקציב מחודש יורש", "הצגת הוצאות מתוכננות שעברו עם אפשרות מחיקה", "חובת תאריך בהוצאה", "תווית חודש נבחר בהוצאות קבועות", "תיקון חישוב ימים שנותרו בחודש"]
+}, {
+  v: "35",
+  date: "1.11.2026",
+  changes: ["מעבר האתר לשרת חדש (Vercel) עם כניסה בקוד משפחתי", "תיקון שמירה ביציאה משדות תקציב ואשראי"]
+}, {
+  v: "30",
+  date: "30.10.2026",
+  changes: ["הוצאות קבועות כשורות קצרות עם אישור לפני מחיקה"]
+}, {
+  v: "29",
+  date: "30.10.2026",
+  changes: ["תחזית כטבלת חודשים מרוכזת עם אזהרה אחת", "פירוט יומי מלא בלחיצה על חודש"]
+}, {
+  v: "28",
+  date: "30.10.2026",
+  changes: ["מסך ראשי נקי: דורש תשומת לב ופירוט מתקפל", "תפריט תחתון של 4 עם כפתור הוספה קבוע"]
+}, {
+  v: "27",
+  date: "30.10.2026",
+  changes: ["חלוקת הקטגוריות יורשת לחודשים הבאים בדשבורד, בהתראות ובמסך התקציב"]
+}, {
+  v: "26",
+  date: "30.10.2026",
+  changes: ["חלוקת מזומן/ביט בתחזית יורשת לחודשים הבאים"]
+}, {
+  v: "25",
+  date: "30.10.2026",
+  changes: ["חודש בלי תקציב מוגדר יורש את התקציב הקודם שהוגדר"]
+}, {
+  v: "24",
+  date: "30.10.2026",
+  changes: ["חלוקת תקציב משתנה לפי אמצעי תשלום: אשראי מול מזומן/ביט"]
+}, {
+  v: "23",
+  date: "30.10.2026",
+  changes: ["סימון חלקי/סופי והערה לחיוב אשראי ידני"]
+}, {
+  v: "22",
+  date: "30.10.2026",
+  changes: ["יתרת פתיחה עם תאריך לתחזית"]
+}];
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
@@ -925,7 +980,21 @@ function LoginScreen({
       fontSize: 13,
       color: COLORS.coral
     }
-  }, err)));
+  }, err), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      marginTop: 14,
+      fontSize: 11,
+      color: COLORS.sub
+    }
+  }, APP_CREDIT), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      marginTop: 4,
+      fontSize: 11,
+      color: COLORS.sub
+    }
+  }, "גרסה ", APP_VERSION, " · עודכן ", APP_VERSION_DATE)));
 }
 
 /* ================= APP ================= */
@@ -1486,6 +1555,13 @@ function BudgetApp() {
         fontSize: 11,
         color: COLORS.sub
       }
+    }, APP_CREDIT), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: "center",
+        marginTop: 4,
+        fontSize: 11,
+        color: COLORS.sub
+      }
     }, "גרסה ", APP_VERSION, " · עודכן ", APP_VERSION_DATE)));
   }
   return /*#__PURE__*/React.createElement("div", {
@@ -1596,7 +1672,7 @@ function BudgetApp() {
     onPick: setTab,
     onRestore: restoreBackup,
     onLogout: logoutRequest
-  }), (tab === "fixed" || tab === "budget" || tab === "advice") && /*#__PURE__*/React.createElement("button", {
+  }), tab === "versions" && /*#__PURE__*/React.createElement(VersionsScreen, null), (tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions") && /*#__PURE__*/React.createElement("button", {
     onClick: () => setTab("more"),
     style: {
       border: "none",
@@ -1849,6 +1925,11 @@ function MoreMenu({
     icon: "💬",
     label: "ייעוץ",
     sub: "חוות דעת וניתוחים קודמים"
+  }, {
+    id: "versions",
+    icon: "🧾",
+    label: "גרסות",
+    sub: "מספר הגרסה ופירוט השינויים"
   }];
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2014,6 +2095,65 @@ function MoreMenu({
       marginTop: 2
     }
   }, "נעילת האתר במכשיר זה; הכניסה מחדש עם הקוד המשפחתי"))));
+}
+function VersionsScreen() {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "Heebo, sans-serif",
+      fontWeight: 800,
+      fontSize: 17,
+      color: COLORS.ink
+    }
+  }, "גרסה ", APP_VERSION, " · עודכן ", APP_VERSION_DATE), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: COLORS.sub,
+      marginTop: 4
+    }
+  }, APP_CREDIT)), RELEASES.map(r => /*#__PURE__*/React.createElement("div", {
+    key: r.v,
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: "14px 16px",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "baseline",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15,
+      color: COLORS.ink
+    }
+  }, "גרסה ", r.v), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: COLORS.sub
+    }
+  }, r.date)), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: "8px 0 0",
+      paddingInlineStart: 18,
+      color: COLORS.sub,
+      fontSize: 13,
+      lineHeight: 1.6
+    }
+  }, r.changes.map((c, i) => /*#__PURE__*/React.createElement("li", {
+    key: i
+  }, c))))));
 }
 const navBtnStyle = {
   width: 34,
