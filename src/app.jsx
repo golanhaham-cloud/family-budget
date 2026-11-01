@@ -25,11 +25,12 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "42";
+const APP_VERSION = "43";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [
+  { v: "43", date: "1.11.2026", changes: ["אפשרות \"שכח שם זה\" בתפריט \"עוד\": הסרת שמות שנשמרו במכשיר הזה למסך הכניסה, בלי יציאה מהאתר ובלי שינוי בנתונים"] },
   { v: "42", date: "1.11.2026", changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה; כשלא הוגדר שם משפחה הנוסח נשאר כללי"] },
   { v: "40", date: "1.11.2026", changes: ["השוואה לחודש הקודם במסך הראשי: סך ההוצאות והפרש לכל קטגוריה, בחודש שוטף עד אותו יום בחודש הקודם"] },
   { v: "39", date: "1.11.2026", changes: ["אתר אחד לכמה משפחות: כל קוד כניסה פותח רק את הנתונים של המשפחה שלו", "מסך \"ניהול משפחות\" למנהל בלבד (דורש קוד מנהל נפרד): יצירת הזמנה, השבתה ושחזור", "פתיחה ראשונה של משפחה מוזמנת: בחירת שם משפחה, קוד כניסה ושמות משתמשים, ואפשרות ליום חיוב אשראי ויתרת פתיחה", "שם המשפחה ושמות המשתמשים מוצגים במסך הכניסה", "הייעוץ האוטומטי זמין למשפחה הראשית בלבד"] },
@@ -356,6 +357,12 @@ function rememberName(householdKey, n) {
     const a = loadRecentNames(householdKey).filter((x) => x !== n);
     a.unshift(n);
     localStorage.setItem(k, JSON.stringify(a.slice(0, 4)));
+  } catch (e) {}
+}
+function forgetName(householdKey, n) {
+  try {
+    const k = RECENT_NAMES_KEY + ":" + (householdKey || "");
+    localStorage.setItem(k, JSON.stringify(loadRecentNames(householdKey).filter((x) => x !== n)));
   } catch (e) {}
 }
 
@@ -698,6 +705,7 @@ function BudgetApp() {
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
   const pickUser = (n) => { rememberName(householdKey, n); setRecentNames(loadRecentNames(householdKey)); setUser(n); };
+  const forgetRecentName = (n) => { forgetName(householdKey, n); setRecentNames(loadRecentNames(householdKey)); };
 
   const mKey = monthKey(monthDate);
   const activeCategories = useMemo(() => data.categories.filter(c => c.active !== false), [data.categories]);
@@ -938,8 +946,9 @@ function BudgetApp() {
         {tab === "expenses" && <ExpensesTab key={mKey} expenses={data.expenses} categories={data.categories} selectedMonth={mKey} onEdit={setEditExpense} />}
         {tab === "more" && <MoreMenu onPick={setTab} onRestore={restoreBackup} onLogout={logoutRequest} isAdmin={isAdmin} />}
         {tab === "versions" && <VersionsScreen />}
+        {tab === "names" && <NamesScreen names={recentNames} onForget={forgetRecentName} />}
         {tab === "households" && isAdmin && <HouseholdsScreen />}
-        {(tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions" || tab === "households") && (
+        {(tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions" || tab === "households" || tab === "names") && (
           <button onClick={() => setTab("more")} style={{ border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer", padding: "2px 0 10px", display: "block" }}>‹ חזרה ל"עוד"</button>
         )}
         {tab === "fixed" && (
@@ -976,7 +985,7 @@ function BudgetApp() {
           <button onClick={() => setShowAddExpense(true)} aria-label="הוצאה חדשה" style={{ width: 54, height: 54, marginTop: -22, borderRadius: 999, border: "none", background: COLORS.sage, color: "#fff", fontSize: 30, lineHeight: 1, cursor: "pointer", boxShadow: "0 4px 12px rgba(47,111,94,0.4)" }}>＋</button>
         </div>
         <NavBtn active={tab === "expenses"} onClick={() => setTab("expenses")} icon="🧾" label="הוצאות" />
-        <NavBtn active={["more", "fixed", "budget", "advice", "households"].includes(tab)} onClick={() => setTab("more")} icon="☰" label="עוד" />
+        <NavBtn active={["more", "fixed", "budget", "advice", "households", "names"].includes(tab)} onClick={() => setTab("more")} icon="☰" label="עוד" />
       </div>
 
       {(showAddExpense || editExpense) && (
@@ -1017,6 +1026,7 @@ function MoreMenu({ onPick, onRestore, onLogout, isAdmin }) {
     { id: "budget", icon: "💰", label: "תקציב", sub: "תקציב לכל קטגוריה וחלוקת מזומן/אשראי" },
     { id: "advice", icon: "💬", label: "ייעוץ", sub: "חוות דעת וניתוחים קודמים" },
     ...(isAdmin ? [{ id: "households", icon: "👪", label: "ניהול משפחות", sub: "קוד כניסה ונתונים נפרדים לכל משפחה" }] : []),
+    { id: "names", icon: "👤", label: "שמות במסך הכניסה", sub: "שמות שנשמרו במכשיר זה לבחירה מהירה, ואפשרות לשכוח אותם" },
     { id: "versions", icon: "🧾", label: "גרסאות", sub: "מספר הגרסה ופירוט השינויים" },
   ];
   return (
@@ -1053,6 +1063,27 @@ function MoreMenu({ onPick, onRestore, onLogout, isAdmin }) {
           <span style={{ display: "block", fontSize: 12, color: COLORS.sub, marginTop: 2 }}>נעילת האתר במכשיר זה; הכניסה מחדש עם הקוד המשפחתי</span>
         </span>
       </button>
+    </div>
+  );
+}
+/* ================= שמות שנשמרו במכשיר הזה ================= */
+function NamesScreen({ names, onForget }) {
+  return (
+    <div style={{ background: COLORS.card, borderRadius: 16, padding: 18 }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>שמות לבחירה מהירה במסך "מי אתה?"</div>
+      <div style={{ fontSize: 13, color: COLORS.sub, lineHeight: 1.6, marginBottom: 12 }}>
+        האתר שומר במכשיר הזה את השמות שהוזנו לאחרונה, כדי להציג אותם ככפתורים במסך הכניסה. השמירה מקומית במכשיר בלבד ולא בשרת. שכחת שם לא מוחקת הוצאות ולא משנה את השם שנרשם על הוצאות קיימות.
+      </div>
+      {names.length === 0 ? (
+        <div style={{ fontSize: 14, color: COLORS.sub }}>אין שמות שמורים במכשיר זה.</div>
+      ) : (
+        names.map((n) => (
+          <div key={n} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderTop: `1px solid ${COLORS.mist}` }}>
+            <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{n}</span>
+            <button onClick={() => onForget(n)} style={{ border: "none", background: "none", color: COLORS.coral, fontWeight: 700, fontSize: 13, cursor: "pointer", padding: "4px 0" }}>שכח שם זה</button>
+          </div>
+        ))
+      )}
     </div>
   );
 }

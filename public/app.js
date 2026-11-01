@@ -78,11 +78,15 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "42";
+const APP_VERSION = "43";
 const APP_VERSION_DATE = "1.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [{
+  v: "43",
+  date: "1.11.2026",
+  changes: ["אפשרות \"שכח שם זה\" בתפריט \"עוד\": הסרת שמות שנשמרו במכשיר הזה למסך הכניסה, בלי יציאה מהאתר ובלי שינוי בנתונים"]
+}, {
   v: "42",
   date: "1.11.2026",
   changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה; כשלא הוגדר שם משפחה הנוסח נשאר כללי"]
@@ -678,6 +682,12 @@ function rememberName(householdKey, n) {
     const a = loadRecentNames(householdKey).filter(x => x !== n);
     a.unshift(n);
     localStorage.setItem(k, JSON.stringify(a.slice(0, 4)));
+  } catch (e) {}
+}
+function forgetName(householdKey, n) {
+  try {
+    const k = RECENT_NAMES_KEY + ":" + (householdKey || "");
+    localStorage.setItem(k, JSON.stringify(loadRecentNames(householdKey).filter(x => x !== n)));
   } catch (e) {}
 }
 let DATA_VERSION = 0;
@@ -1605,6 +1615,10 @@ function BudgetApp() {
     setRecentNames(loadRecentNames(householdKey));
     setUser(n);
   };
+  const forgetRecentName = n => {
+    forgetName(householdKey, n);
+    setRecentNames(loadRecentNames(householdKey));
+  };
   const mKey = monthKey(monthDate);
   const activeCategories = useMemo(() => data.categories.filter(c => c.active !== false), [data.categories]);
   const monthBudgets = data.budgets[mKey] || {};
@@ -2254,7 +2268,10 @@ function BudgetApp() {
     onRestore: restoreBackup,
     onLogout: logoutRequest,
     isAdmin: isAdmin
-  }), tab === "versions" && /*#__PURE__*/React.createElement(VersionsScreen, null), tab === "households" && isAdmin && /*#__PURE__*/React.createElement(HouseholdsScreen, null), (tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions" || tab === "households") && /*#__PURE__*/React.createElement("button", {
+  }), tab === "versions" && /*#__PURE__*/React.createElement(VersionsScreen, null), tab === "names" && /*#__PURE__*/React.createElement(NamesScreen, {
+    names: recentNames,
+    onForget: forgetRecentName
+  }), tab === "households" && isAdmin && /*#__PURE__*/React.createElement(HouseholdsScreen, null), (tab === "fixed" || tab === "budget" || tab === "advice" || tab === "versions" || tab === "households" || tab === "names") && /*#__PURE__*/React.createElement("button", {
     onClick: () => setTab("more"),
     style: {
       border: "none",
@@ -2381,7 +2398,7 @@ function BudgetApp() {
     icon: "🧾",
     label: "הוצאות"
   }), /*#__PURE__*/React.createElement(NavBtn, {
-    active: ["more", "fixed", "budget", "advice", "households"].includes(tab),
+    active: ["more", "fixed", "budget", "advice", "households", "names"].includes(tab),
     onClick: () => setTab("more"),
     icon: "☰",
     label: "עוד"
@@ -2515,6 +2532,11 @@ function MoreMenu({
     label: "ניהול משפחות",
     sub: "קוד כניסה ונתונים נפרדים לכל משפחה"
   }] : []), {
+    id: "names",
+    icon: "👤",
+    label: "שמות במסך הכניסה",
+    sub: "שמות שנשמרו במכשיר זה לבחירה מהירה, ואפשרות לשכוח אותם"
+  }, {
     id: "versions",
     icon: "🧾",
     label: "גרסאות",
@@ -2684,6 +2706,64 @@ function MoreMenu({
       marginTop: 2
     }
   }, "נעילת האתר במכשיר זה; הכניסה מחדש עם הקוד המשפחתי"))));
+}
+/* ================= שמות שנשמרו במכשיר הזה ================= */
+function NamesScreen({
+  names,
+  onForget
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 16,
+      padding: 18
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15,
+      marginBottom: 6
+    }
+  }, "שמות לבחירה מהירה במסך \"מי אתה?\""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: COLORS.sub,
+      lineHeight: 1.6,
+      marginBottom: 12
+    }
+  }, "האתר שומר במכשיר הזה את השמות שהוזנו לאחרונה, כדי להציג אותם ככפתורים במסך הכניסה. השמירה מקומית במכשיר בלבד ולא בשרת. שכחת שם לא מוחקת הוצאות ולא משנה את השם שנרשם על הוצאות קיימות."), names.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: COLORS.sub
+    }
+  }, "אין שמות שמורים במכשיר זה.") : names.map(n => /*#__PURE__*/React.createElement("div", {
+    key: n,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+      padding: "10px 0",
+      borderTop: `1px solid ${COLORS.mist}`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontWeight: 600,
+      fontSize: 14,
+      color: COLORS.ink
+    }
+  }, n), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onForget(n),
+    style: {
+      border: "none",
+      background: "none",
+      color: COLORS.coral,
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: "pointer",
+      padding: "4px 0"
+    }
+  }, "שכח שם זה"))));
 }
 /* ================= מסך ניהול משפחות (מנהל בלבד) ================= */
 async function householdsRequest(method, body) {
