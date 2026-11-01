@@ -1,4 +1,4 @@
-const CACHE_NAME = "family-budget-cache-v2";
+const CACHE_NAME = "family-budget-cache-v4";
 const APP_SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -21,7 +21,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
   // Never cache API calls - always go to network for live data
-  if (url.hostname.includes("jsonbin.io") || url.pathname.includes("/.netlify/functions/")) {
+  if (url.pathname.startsWith("/api/")) {
     event.respondWith(fetch(event.request));
     return;
   }

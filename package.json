@@ -1,0 +1,7 @@
+{
+  "name": "family-budget",
+  "private": true,
+  "version": "2.0.0",
+  "dependencies": { "@vercel/blob": "^2.3.0" },
+  "scripts": { "test": "node tests/run.js" }
+}

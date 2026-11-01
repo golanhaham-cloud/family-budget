@@ -81,8 +81,8 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "30";
-const APP_VERSION_DATE = "30.10.2026";
+const APP_VERSION = "35";
+const APP_VERSION_DATE = "1.11.2026";
 
 function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
 function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
@@ -121,9 +121,7 @@ function buildBudgetAlerts(perCategory, paceHigh, projected) {
   return [...over, ...pace, ...near, ...full];
 }
 
-/* ---------- storage helpers (JSONBin.io) ---------- */
-const JSONBIN_KEY = "$2a$10$kkHgiizSJvcrwVITcEUyR.54ETgOge.LQOe2krljF5w.usnpmzgsC";
-const JSONBIN_ID = "6a84c53fda38895dfef45d8e"; // מאגר קבוע - משותף לשני המשתמשים
+/* ---------- storage helpers (server API) ---------- */
 const EMPTY_DATA = { categories: DEFAULT_CATEGORIES, budgets: {}, expenses: [], fixedExpenses: [], incomeEntries: [], recurringIncomes: [], plannedExpenses: [], settings: { creditLag: false, openingBalance: 0, openingBalanceDate: "", creditBillingDay: 1, variableOverrides: {}, variableOverrideMeta: {}, cashBudgets: {}, lastAdvice: null, advices: [], cards: [] } };
 function normalizeData(d) {
   return {
@@ -334,34 +332,39 @@ function validateIncomeLink(rid, ids, incomeEntries) {
   return "";
 }
 
-async function jsonbinCreate() {
-  const res = await fetch("https://api.jsonbin.io/v3/b", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY, "X-Bin-Name": "family-budget" },
-    body: JSON.stringify(EMPTY_DATA),
-  });
-  if (!res.ok) throw new Error("create failed");
-  const json = await res.json();
-  return json.metadata.id;
-}
-async function loadAppData(binId) {
-  if (!binId) return EMPTY_DATA;
+let DATA_VERSION = 0;
+const API_GET = { credentials: "same-origin", headers: { "X-Requested-With": "fb" } };
+async function loadAppData() {
   try {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, { headers: { "X-Master-Key": JSONBIN_KEY } });
-    if (!res.ok) throw new Error("load failed");
+    const res = await fetch("/api/data", API_GET);
+    if (res.status === 401) return { status: "unauthorized" };
+    if (!res.ok) return { status: "error" };
     const json = await res.json();
-    return normalizeData(json.record || EMPTY_DATA);
-  } catch (e) { console.error(e); return EMPTY_DATA; }
+    DATA_VERSION = json.version || 0;
+    return { status: "ok", data: json.data ? normalizeData(json.data) : EMPTY_DATA };
+  } catch (e) { console.error(e); return { status: "error" }; }
 }
-async function saveAppData(binId, data) {
-  if (!binId) return;
+async function saveAppData(data) {
   try {
-    await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_KEY },
-      body: JSON.stringify(data),
+    const res = await fetch("/api/data", {
+      method: "PUT", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "fb" },
+      body: JSON.stringify({ baseVersion: DATA_VERSION, data }),
     });
-  } catch (e) { console.error(e); }
+    if (res.ok) { DATA_VERSION = (await res.json()).version; return "ok"; }
+    if (res.status === 409) return "conflict";
+    if (res.status === 401) return "unauthorized";
+    if (res.status === 429) return "rate";
+    return "error";
+  } catch (e) { console.error(e); return "error"; }
+}
+async function loginRequest(passcode) {
+  const res = await fetch("/api/login", {
+    method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-Requested-With": "fb" },
+    body: JSON.stringify({ passcode }),
+  });
+  return { ok: res.ok, status: res.status };
 }
 
 /* ---------- small UI atoms ---------- */
@@ -457,59 +460,39 @@ function CumulativeLineChart({ points, budget }) {
   );
 }
 
-/* ================= SETUP SCREEN ================= */
-function SetupScreen({ onCreated }) {
-  const [status, setStatus] = useState("idle");
-  const [binId, setBinId] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const create = async () => {
-    setStatus("working");
+/* ================= LOGIN SCREEN ================= */
+function LoginScreen({ onLoggedIn }) {
+  const [pass, setPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!pass || busy) return;
+    setBusy(true); setErr("");
     try {
-      const id = await jsonbinCreate();
-      setBinId(id);
-      setStatus("done");
-    } catch (e) { setStatus("error"); }
+      const r = await loginRequest(pass);
+      if (r.ok) { setPass(""); onLoggedIn(); return; }
+      setErr(r.status === 429 ? "יותר מדי ניסיונות. נסו שוב בעוד כמה דקות." : r.status === 503 ? "הכניסה עדיין לא הוגדרה בשרת." : "קוד שגוי");
+    } catch (e2) { setErr("אין חיבור לשרת. נסו שוב."); }
+    setBusy(false);
   };
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(binId); setCopied(true); setTimeout(() => setCopied(false), 2000); }
-    catch (e) {}
-  };
-
   return (
     <div style={{ minHeight: "100vh", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: COLORS.card, borderRadius: 20, padding: 26, width: "100%", maxWidth: 400, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
-        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>הקמה חד-פעמית</div>
-        {status !== "done" && (
-          <>
-            <div style={{ color: COLORS.sub, fontSize: 13.5, marginBottom: 20, lineHeight: 1.6 }}>
-              לפני שהאפליקציה יכולה לשמור נתונים, צריך ליצור מאגר נתונים אחד. זה נעשה פעם אחת בלבד.
-            </div>
-            <button onClick={create} disabled={status === "working"} style={{
-              width: "100%", padding: "14px", borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff",
-              fontWeight: 800, fontSize: 15, cursor: status === "working" ? "default" : "pointer", opacity: status === "working" ? 0.7 : 1
-            }}>{status === "working" ? "יוצר מאגר…" : "צור מאגר נתונים"}</button>
-            {status === "error" && <div style={{ marginTop: 12, fontSize: 12.5, color: COLORS.coral }}>משהו השתבש. בדוק חיבור לאינטרנט ונסה שוב.</div>}
-          </>
-        )}
-        {status === "done" && (
-          <>
-            <div style={{ color: COLORS.sage, fontSize: 13.5, marginBottom: 14, fontWeight: 600 }}>
-              ✅ המאגר נוצר! העתק את הקוד ושלח אותו ל-Claude כדי לנעול אותו לצמיתות עבור שניכם:
-            </div>
-            <div style={{ background: COLORS.paper, border: `1.5px solid ${COLORS.mist}`, borderRadius: 10, padding: "12px 14px", fontSize: 13, fontFamily: "monospace", direction: "ltr", textAlign: "center", marginBottom: 12, wordBreak: "break-all" }}>{binId}</div>
-            <button onClick={copy} style={{ width: "100%", padding: "12px", borderRadius: 12, border: `1.5px solid ${COLORS.sage}`, background: copied ? COLORS.sageLight : "#fff", color: COLORS.sage, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 }}>{copied ? "הועתק ✓" : "העתק קוד"}</button>
-            <button onClick={() => onCreated(binId)} style={{ width: "100%", padding: "12px", borderRadius: 12, border: "none", background: COLORS.ink, color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>המשך לאפליקציה בינתיים</button>
-          </>
-        )}
-      </div>
+      <form onSubmit={submit} style={{ background: COLORS.card, borderRadius: 20, padding: 26, width: "100%", maxWidth: 380, boxShadow: "0 8px 30px rgba(20,33,61,0.08)" }}>
+        <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 20, color: COLORS.ink, marginBottom: 6 }}>כניסה</div>
+        <div style={{ color: COLORS.sub, fontSize: 13.5, marginBottom: 16 }}>הזינו את קוד הכניסה המשפחתי.</div>
+        <input type="password" autoComplete="current-password" aria-label="קוד כניסה" value={pass} onChange={(e) => setPass(e.target.value)}
+          style={{ width: "100%", height: 46, borderRadius: 12, border: `1.5px solid ${COLORS.mist}`, padding: "0 12px", fontSize: 16, marginBottom: 12 }} />
+        <button type="submit" disabled={busy || !pass} style={{ width: "100%", padding: 14, borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 800, fontSize: 15, opacity: busy || !pass ? 0.6 : 1 }}>{busy ? "בודק…" : "כניסה"}</button>
+        {err && <div role="alert" style={{ marginTop: 12, fontSize: 13, color: COLORS.coral }}>{err}</div>}
+      </form>
     </div>
   );
 }
 
 /* ================= APP ================= */
 function BudgetApp() {
-  const [activeBinId, setActiveBinId] = useState(JSONBIN_ID);
+  const [authState, setAuthState] = useState("loading");
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(EMPTY_DATA);
   const [user, setUser] = useState(null);
@@ -519,16 +502,27 @@ function BudgetApp() {
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [editExpense, setEditExpense] = useState(null);
   const [toast, setToast] = useState(null);
+  const [pendingRestore, setPendingRestore] = useState(null);
 
-  useEffect(() => {
-    if (!activeBinId) { setLoading(false); return; }
-    (async () => { const d = await loadAppData(activeBinId); setData(d); setLoading(false); })();
-  }, [activeBinId]);
+  const reload = useCallback(async () => {
+    const r = await loadAppData();
+    if (r.status === "ok") { setData(r.data); setAuthState("ready"); }
+    else setAuthState(r.status === "unauthorized" ? "login" : "error");
+    setLoading(false);
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
 
   const persist = useCallback(async (next) => {
+    const prev = dataRef.current;
     setData(next);
-    await saveAppData(activeBinId, next);
-  }, [activeBinId]);
+    const r = await saveAppData(next);
+    if (r === "ok") return true;
+    if (r === "conflict") { showToast("הנתונים עודכנו ממכשיר אחר. טוען מחדש, נסו שוב."); await reload(); }
+    else if (r === "unauthorized") { setAuthState("login"); }
+    else if (r === "rate") { setData(prev); showToast("הגעתם למגבלת השמירות. נסו שוב מאוחר יותר."); }
+    else { setData(prev); showToast("השמירה נכשלה. השינוי לא נשמר, נסו שוב."); }
+    return false;
+  }, [reload]);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
 
@@ -567,14 +561,13 @@ function BudgetApp() {
 
   const alerts = useMemo(() => buildBudgetAlerts(perCategory, paceHigh, projected), [perCategory, paceHigh, projected]);
 
-  const changeMonth = (delta) => { const d = new Date(monthDate); d.setMonth(d.getMonth() + delta); setMonthDate(d); };
+  const changeMonth = (delta) => setMonthDate(d => new Date(d.getFullYear(), d.getMonth() + delta, 1));
 
   const copyPrevBudget = async () => {
     const prev = new Date(monthDate); prev.setMonth(prev.getMonth() - 1);
     const prevBudget = data.budgets[monthKey(prev)];
     if (!prevBudget) { showToast("אין תקציב לחודש הקודם"); return; }
-    await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...prevBudget } } });
-    showToast("התקציב הועתק מהחודש הקודם");
+    if (await persist({ ...data, budgets: { ...data.budgets, [mKey]: { ...prevBudget } } })) showToast("התקציב הועתק מהחודש הקודם");
   };
   const setCategoryBudget = async (catId, amount) => {
     // עריכה ראשונה בחודש יורש: מממשים את החלוקה שנמשכה כבסיס, כדי ששינוי קטגוריה אחת לא יאפס את האחרות.
@@ -589,11 +582,21 @@ function BudgetApp() {
     const next = exp.id
       ? { ...data, expenses: data.expenses.map(e => e.id === exp.id ? exp : e) }
       : { ...data, expenses: [...data.expenses, { ...exp, id: uid(), createdAt: Date.now() }] };
-    await persist(next);
+    if (!(await persist(next))) return;
     setShowAddExpense(false); setEditExpense(null);
     showToast("ההוצאה נשמרה");
   };
-  const deleteExpense = async (id) => { await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); showToast("ההוצאה נמחקה"); };
+  const restoreBackup = async (file) => {
+    let obj;
+    try { obj = JSON.parse(await file.text()); } catch { showToast("הקובץ אינו גיבוי תקין"); return; }
+    if (!obj || !Array.isArray(obj.categories) || !Array.isArray(obj.expenses) || !Array.isArray(obj.fixedExpenses)) { showToast("הקובץ אינו גיבוי תקין"); return; }
+    setPendingRestore(obj);
+  };
+  const confirmRestore = async () => {
+    const obj = pendingRestore; setPendingRestore(null);
+    if (obj && await persist(obj)) { await reload(); showToast("הנתונים שוחזרו מהגיבוי"); }
+  };
+  const deleteExpense = async (id) => { const saved = await persist({ ...data, expenses: data.expenses.filter(e => e.id !== id) }); if (saved) showToast("ההוצאה נמחקה"); return saved; };
 
   const addFixedExpense = async (name, amount, dueDay, frequencyMonths, anchorMonth, effectiveFrom, effectiveTo, onCredit, cardId) => {
     const period = {}; if (onCredit) { period.onCredit = true; if (cardId) period.cardId = cardId; } if (effectiveFrom) period.effectiveFrom = effectiveFrom; if (effectiveTo) period.effectiveTo = effectiveTo;
@@ -688,7 +691,8 @@ function BudgetApp() {
     await persist({ ...data, settings: { ...data.settings, openingBalanceDate: val || "" } });
   };
 
-  if (!activeBinId) return <SetupScreen onCreated={(id) => setActiveBinId(id)} />;
+  if (authState === "login") return <LoginScreen onLoggedIn={() => { setLoading(true); reload(); }} />;
+  if (authState === "error") return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: COLORS.paper, color: COLORS.coral, padding: 20, textAlign: "center" }}>לא ניתן לטעון את הנתונים. רעננו את הדף ונסו שוב.</div>;
 
   if (loading) {
     return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: COLORS.paper }}><div style={{ color: COLORS.sub }}>טוען…</div></div>;
@@ -728,9 +732,9 @@ function BudgetApp() {
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: COLORS.card, borderRadius: 10, padding: "6px 10px", fontSize: 13, color: COLORS.sub }}>👤 {user}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 10 }}>
-          <button onClick={() => changeMonth(1)} style={navBtnStyle}>›</button>
+          <button onClick={() => changeMonth(1)} aria-label="החודש הבא" style={{ ...navBtnStyle, width: 44, height: 44 }}>›</button>
           <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 17, minWidth: 140, textAlign: "center" }}>{HEBREW_MONTHS[monthDate.getMonth()]} {monthDate.getFullYear()}</div>
-          <button onClick={() => changeMonth(-1)} style={navBtnStyle}>‹</button>
+          <button onClick={() => changeMonth(-1)} aria-label="החודש הקודם" style={{ ...navBtnStyle, width: 44, height: 44 }}>‹</button>
         </div>
       </div>
 
@@ -739,10 +743,11 @@ function BudgetApp() {
           <Dashboard totalBudget={totalBudget} totalSpent={totalSpent} remaining={remaining} overallPct={overallPct} budgetSourceLabel={budgetSourceLabel}
             daysLeft={daysLeft} isCurrentMonth={isCurrentMonth} projected={projected} paceHigh={paceHigh}
             perCategory={perCategory} alerts={alerts} expenses={monthExpenses} categories={activeCategories} dim={dim}
+            allExpenses={data.expenses} settings={data.settings} fixedExpenses={data.fixedExpenses} realNowKey={monthKey(now)}
             onEditExpense={setEditExpense} onDeleteExpense={deleteExpense} onShowAllExpenses={() => setTab("expenses")} />
         )}
-        {tab === "expenses" && <ExpensesTab expenses={data.expenses} categories={data.categories} onEdit={setEditExpense} onDelete={deleteExpense} />}
-        {tab === "more" && <MoreMenu onPick={setTab} />}
+        {tab === "expenses" && <ExpensesTab key={mKey} expenses={data.expenses} categories={data.categories} selectedMonth={mKey} onEdit={setEditExpense} />}
+        {tab === "more" && <MoreMenu onPick={setTab} onRestore={restoreBackup} />}
         {(tab === "fixed" || tab === "budget" || tab === "advice") && (
           <button onClick={() => setTab("more")} style={{ border: "none", background: "none", color: COLORS.sage, fontWeight: 700, fontSize: 13.5, cursor: "pointer", padding: "2px 0 10px", display: "block" }}>‹ חזרה ל"עוד"</button>
         )}
@@ -785,14 +790,37 @@ function BudgetApp() {
 
       {(showAddExpense || editExpense) && (
         <ExpenseModal categories={activeCategories.length ? activeCategories : data.categories} user={user} initial={editExpense}
-          onClose={() => { setShowAddExpense(false); setEditExpense(null); }} onSave={saveExpense} />
+          onClose={() => { setShowAddExpense(false); setEditExpense(null); }} onSave={saveExpense}
+          onDelete={async (id) => { if (await deleteExpense(id)) setEditExpense(null); }} />
+      )}
+      {pendingRestore && (
+        <div role="dialog" aria-label="אישור שחזור" style={{ position: "fixed", inset: 0, background: "rgba(20,33,61,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 20 }}>
+          <div style={{ background: COLORS.card, borderRadius: 16, padding: 20, maxWidth: 340, width: "100%" }}>
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>לשחזר מהגיבוי?</div>
+            <div style={{ fontSize: 13.5, color: COLORS.sub, marginBottom: 16 }}>כל הנתונים הנוכחיים יוחלפו. בקובץ: {pendingRestore.expenses.length} הוצאות, {pendingRestore.fixedExpenses.length} הוצאות קבועות.</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={confirmRestore} style={{ flex: 1, padding: 12, borderRadius: 12, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 800 }}>שחזור</button>
+              <button onClick={() => setPendingRestore(null)} style={{ flex: 1, padding: 12, borderRadius: 12, border: `1px solid ${COLORS.mist}`, background: "none", fontWeight: 700 }}>ביטול</button>
+            </div>
+          </div>
+        </div>
       )}
       {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", background: COLORS.ink, color: "#fff", padding: "10px 18px", borderRadius: 10, fontSize: 13, zIndex: 50 }}>{toast}</div>}
     </div>
   );
 }
 
-function MoreMenu({ onPick }) {
+async function downloadBackup() {
+  const res = await fetch("/api/export", { credentials: "same-origin" });
+  if (!res.ok) { alert("הורדת הגיבוי נכשלה"); return; }
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "family-budget-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function MoreMenu({ onPick, onRestore }) {
   const items = [
     { id: "fixed", icon: "📌", label: "הוצאות קבועות", sub: "סכומים, כרטיסים, תוקף ושינוי סכום" },
     { id: "budget", icon: "💰", label: "תקציב", sub: "תקציב לכל קטגוריה וחלוקת מזומן/אשראי" },
@@ -810,6 +838,21 @@ function MoreMenu({ onPick }) {
           <span style={{ color: COLORS.sub }}>‹</span>
         </button>
       ))}
+      <button onClick={downloadBackup} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", border: "none", borderTop: `1px solid ${COLORS.mist}`, background: "none", cursor: "pointer", textAlign: "right", font: "inherit", color: "inherit" }}>
+        <span style={{ fontSize: 22 }}>⬇️</span>
+        <span style={{ flex: 1 }}>
+          <span style={{ display: "block", fontWeight: 700, fontSize: 15 }}>הורדת גיבוי</span>
+          <span style={{ display: "block", fontSize: 12, color: COLORS.sub, marginTop: 2 }}>קובץ עם כל הנתונים, מומלץ פעם בחודש</span>
+        </span>
+      </button>
+      <label style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderTop: `1px solid ${COLORS.mist}`, cursor: "pointer" }}>
+        <span style={{ fontSize: 22 }}>⬆️</span>
+        <span style={{ flex: 1 }}>
+          <span style={{ display: "block", fontWeight: 700, fontSize: 15 }}>שחזור מגיבוי</span>
+          <span style={{ display: "block", fontSize: 12, color: COLORS.sub, marginTop: 2 }}>מחליף את כל הנתונים הנוכחיים בקובץ גיבוי</span>
+        </span>
+        <input type="file" accept="application/json,.json" aria-label="קובץ גיבוי" style={{ display: "none" }} onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; if (f) onRestore(f); }} />
+      </label>
     </div>
   );
 }
@@ -887,7 +930,47 @@ function AttentionList({ alerts }) {
     </div>
   );
 }
-function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, onShowAllExpenses, budgetSourceLabel }) {
+// רצועת "מצב הנתונים" - תצוגה בלבד: מבחינה בין נתון מאומת, חלקי והערכה. לא משנה שום חישוב.
+function DataStatusStrip({ settings, fixedExpenses, realNowKey }) {
+  const rows = [];
+  const ob = Number(settings && settings.openingBalance) || 0;
+  const obDate = (settings && settings.openingBalanceDate) || "";
+  if (ob !== 0 || obDate) {
+    rows.push({ key: "ob", label: "יתרת פתיחה לתחזית", value: fmt(ob),
+      tag: obDate ? { text: `מעוגנת ל־${obDate.split("-").reverse().join(".")}`, tone: "ok" } : { text: "לא מאומתת · חסר תאריך", tone: "warn" } });
+  }
+  const nextK = shiftMonthKey(realNowKey, 1);
+  const nextOvr = settings && settings.variableOverrides ? settings.variableOverrides[nextK] : undefined;
+  if (nextOvr !== undefined && nextOvr !== null) {
+    const st = settings && settings.variableOverrideMeta && settings.variableOverrideMeta[nextK] ? settings.variableOverrideMeta[nextK].status : "";
+    const nextName = HEBREW_MONTHS[Number(nextK.split("-")[1]) - 1];
+    rows.push({ key: "bill", label: `חיוב אשראי ל${nextName}`, value: fmt(nextOvr),
+      tag: st === "partial" ? { text: "חלקי", tone: "warn" } : st === "final" ? { text: "סופי", tone: "ok" } : { text: "טרם סומן חלקי/סופי", tone: "warn" } });
+  }
+  const est = (fixedExpenses || []).filter(f => f.active !== false && isFixedInPeriod(f, realNowKey) && /הערכה|ממוצע/.test(f.name || ""));
+  if (est.length) {
+    const names = est.map(f => String(f.name).replace(/\s*\((הערכה|ממוצע)\)\s*/g, "").trim());
+    const sameFreq = est.every(f => (f.frequencyMonths || 1) === (est[0].frequencyMonths || 1));
+    const label = names.join(", ") + (sameFreq && (est[0].frequencyMonths || 1) > 1 ? ` · ${fixedFreqLabel(est[0].frequencyMonths)}` : "");
+    rows.push({ key: "est", label, value: est.map(f => fmt(f.amount).replace(" ₪", "")).join(" + ") + " ₪", tag: { text: "הערכה", tone: "warn" } });
+  }
+  if (!rows.length) return null;
+  const tones = { warn: { bg: COLORS.amberLight, fg: "#8a6400", bar: COLORS.amber }, ok: { bg: COLORS.sageLight, fg: COLORS.sage, bar: COLORS.sage } };
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 14, margin: "2px 2px 8px", color: COLORS.sub }}>מצב הנתונים</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {rows.map(r => { const t = tones[r.tag.tone]; return (
+          <div key={r.key} style={{ background: COLORS.card, borderRadius: 10, padding: "9px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, borderInlineStart: `4px solid ${t.bar}`, fontSize: 13, boxShadow: "0 1px 4px rgba(20,33,61,0.04)" }}>
+            <span style={{ color: COLORS.ink, minWidth: 0 }}>{r.label} <span style={{ fontSize: 10.5, fontWeight: 700, color: t.fg, background: t.bg, borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap" }}>{r.tag.text}</span></span>
+            <span style={{ fontWeight: 700, color: COLORS.ink, whiteSpace: "nowrap" }}>{r.value}</span>
+          </div> ); })}
+      </div>
+    </div>
+  );
+}
+
+function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, isCurrentMonth, projected, paceHigh, perCategory, alerts, expenses, categories, dim, onEditExpense, onDeleteExpense, onShowAllExpenses, budgetSourceLabel, allExpenses, settings, fixedExpenses, realNowKey }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const gaugeColor = statusColor(overallPct);
   const recent = [...expenses].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 3);
@@ -923,6 +1006,18 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
         {budgetSourceLabel && totalBudget > 0 && (
           <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.sub, lineHeight: 1.5 }}>התקציב נמשך אוטומטית מ{budgetSourceLabel}. שינוי ערך במסך התקציב יחול על החודש המוצג בלבד.</div>
         )}
+        {isCurrentMonth && (() => {
+          let latest = "";
+          (allExpenses || []).forEach(e => { if (e.date && e.date > latest) latest = e.date; });
+          if (!latest) return null;
+          const parts = latest.split("-");
+          const stale = Math.floor((new Date(todayISO()) - new Date(latest)) / 86400000) >= 3;
+          return (
+            <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 10, fontSize: 12.5, lineHeight: 1.5, background: stale ? COLORS.amberLight : COLORS.paper, border: `1px solid ${stale ? COLORS.amber : COLORS.mist}`, color: stale ? "#8a6400" : COLORS.sub }}>
+              תאריך ההוצאה האחרונה ברשימה: <b>{`${Number(parts[2])}.${Number(parts[1])}`}</b>{stale ? " · ייתכן שיש הוצאות נוספות שטרם נרשמו" : ""}
+            </div>
+          );
+        })()}
         {isCurrentMonth && (
           <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${COLORS.mist}`, display: "flex", justifyContent: "space-between", fontSize: 13, color: COLORS.sub }}>
             <span>{daysLeft} ימים נותרו החודש</span>
@@ -933,6 +1028,8 @@ function Dashboard({ totalBudget, totalSpent, remaining, overallPct, daysLeft, i
           <div style={{ marginTop: 6, fontSize: 12.5, color: COLORS.sub }}>אם תמשיך בקצב הנוכחי, צפוי שתסיים את החודש ב־<b style={{ color: COLORS.ink }}>{fmt(projected)}</b></div>
         )}
       </div>
+
+      <DataStatusStrip settings={settings} fixedExpenses={fixedExpenses} realNowKey={realNowKey} />
 
       <AttentionList alerts={alerts} />
 
@@ -1022,49 +1119,70 @@ function ExpenseRow({ exp, categories, last, onEdit, onDelete }) {
 const iconBtnStyle = { width: 28, height: 28, borderRadius: 8, border: "none", background: COLORS.paper, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 };
 
 /* ================= EXPENSES TAB ================= */
-function ExpensesTab({ expenses, categories, onEdit, onDelete }) {
+function ExpensesTab({ expenses, categories, selectedMonth, onEdit }) {
   const [filterCat, setFilterCat] = useState("");
   const [filterUser, setFilterUser] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
   const [q, setQ] = useState("");
-  const users = useMemo(() => [...new Set(expenses.map(e => e.user).filter(Boolean))], [expenses]);
-  const filtered = useMemo(() => expenses
+  const [showFilters, setShowFilters] = useState(false);
+  const monthEntries = useMemo(() => expenses.filter(e => (e.date || "").startsWith(selectedMonth + "-")), [expenses, selectedMonth]);
+  const users = useMemo(() => [...new Set(monthEntries.map(e => e.user).filter(Boolean))], [monthEntries]);
+  const filtered = useMemo(() => monthEntries
     .filter(e => !filterCat || e.categoryId === filterCat)
     .filter(e => !filterUser || e.user === filterUser)
-    .filter(e => !from || e.date >= from)
-    .filter(e => !to || e.date <= to)
-    .filter(e => !q || (e.description || "").includes(q))
+    .filter(e => !q.trim() || (e.description || "").toLocaleLowerCase().includes(q.trim().toLocaleLowerCase()))
     .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0)),
-    [expenses, filterCat, filterUser, from, to, q]);
+    [monthEntries, filterCat, filterUser, q]);
   const total = filtered.reduce((s, e) => s + Number(e.amount || 0), 0);
-
+  const days = useMemo(() => {
+    const grouped = new Map();
+    filtered.forEach(e => { if (!grouped.has(e.date)) grouped.set(e.date, []); grouped.get(e.date).push(e); });
+    return [...grouped.entries()];
+  }, [filtered]);
+  const filterCount = Number(!!filterCat) + Number(!!filterUser);
+  const isFiltered = !!(filterCat || filterUser || q.trim());
+  const clear = () => { setFilterCat(""); setFilterUser(""); setQ(""); };
+  const control = { minHeight: 44, fontSize: 14, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", color: COLORS.ink, fontFamily: "inherit", padding: "10px 12px" };
   return (
-    <div>
-      <div style={{ background: COLORS.card, borderRadius: 16, padding: 12, marginBottom: 12 }}>
-        <input placeholder="🔍 חיפוש לפי תיאור" value={q} onChange={e => setQ(e.target.value)} style={{ width: "100%", padding: "9px 10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, fontSize: 13.5, marginBottom: 8, boxSizing: "border-box" }} />
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={selectStyle}>
-            <option value="">כל הקטגוריות</option>
-            {categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-          </select>
-          <select value={filterUser} onChange={e => setFilterUser(e.target.value)} style={selectStyle}>
-            <option value="">כל המשתמשים</option>
-            {users.map(u => <option key={u} value={u}>{u}</option>)}
-          </select>
+    <div style={{ maxWidth: 760, margin: "0 auto" }}>
+      <h1 style={{ fontFamily: "Heebo, sans-serif", fontSize: 21, margin: "2px 2px 12px" }}>הוצאות</h1>
+      <div style={{ background: COLORS.card, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 13, color: COLORS.sub }}>{isFiltered ? "נרשם בחודש זה · לפי הסינון" : "נרשם בחודש זה"}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginTop: 4 }}>
+          <strong data-testid="expenses-total" style={{ fontSize: 28, fontFamily: "Heebo, sans-serif" }}>{fmt(total)}</strong>
+          <span data-testid="expenses-count" style={{ fontSize: 14, color: COLORS.sub }}>{filtered.length} הוצאות</span>
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-          <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
-          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...selectStyle, flex: 1 }} />
+        <div style={{ fontSize: 12, color: COLORS.sub, borderTop: `1px solid ${COLORS.mist}`, paddingTop: 10, marginTop: 10 }}>רק הוצאות מ{monthLabelOf(selectedMonth)} · לפי תאריך ההוצאה</div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <input aria-label="חיפוש בחודש הזה" placeholder="חיפוש בחודש הזה…" value={q} onChange={e => setQ(e.target.value)} style={{ ...control, minWidth: 0, flex: 1 }} />
+        <button aria-expanded={showFilters} aria-controls="expense-filters" onClick={() => setShowFilters(v => !v)} style={{ ...control, fontWeight: 600, flexShrink: 0 }}>סינון{filterCount ? ` (${filterCount})` : ""} {showFilters ? "▴" : "▾"}</button>
+      </div>
+      {showFilters && <div id="expense-filters" style={{ background: COLORS.card, borderRadius: 14, padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <label style={{ flex: "1 1 130px", fontSize: 12, color: COLORS.sub }}>קטגוריה
+          <select aria-label="סינון לפי קטגוריה" value={filterCat} onChange={e => setFilterCat(e.target.value)} style={{ ...control, width: "100%", marginTop: 4 }}>
+            <option value="">כל הקטגוריות</option>{categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+          </select>
+        </label>
+        <label style={{ flex: "1 1 130px", fontSize: 12, color: COLORS.sub }}>מי ביצע
+          <select aria-label="סינון לפי משתמש" value={filterUser} onChange={e => setFilterUser(e.target.value)} style={{ ...control, width: "100%", marginTop: 4 }}>
+            <option value="">כל המשתמשים</option>{users.map(u => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </label>
+      </div>}
+      {isFiltered && <button onClick={clear} style={{ ...control, background: "none", border: "none", color: COLORS.sage, fontWeight: 700 }}>ניקוי החיפוש והסינון</button>}
+      {filtered.length === 0 && <div style={{ padding: "28px 16px", textAlign: "center", color: COLORS.sub, background: COLORS.card, borderRadius: 16 }}>{monthEntries.length === 0 ? "אין עדיין הוצאות בחודש הזה" : "לא נמצאו הוצאות לפי הסינון"}</div>}
+      {days.map(([date, entries]) => <section key={date} style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "space-between", padding: "10px 4px 8px", fontSize: 13, color: COLORS.sub }}>
+          <strong>{`${Number(date.slice(8, 10))} ב${HEBREW_MONTHS[Number(date.slice(5, 7)) - 1]}`}</strong>
+          <span>{entries.length === 1 ? "הוצאה אחת" : `${entries.length} הוצאות`} · {fmt(entries.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
         </div>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", padding: "0 4px 8px", fontSize: 13, color: COLORS.sub }}>
-        <span>{filtered.length} הוצאות</span><span style={{ fontWeight: 700, color: COLORS.ink }}>סה"כ: {fmt(total)}</span>
-      </div>
-      <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 20 }}>
-        {filtered.length === 0 && <div style={{ padding: 20, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>לא נמצאו הוצאות</div>}
-        {filtered.map((e, i) => <ExpenseRow key={e.id} exp={e} categories={categories} last={i === filtered.length - 1} onEdit={onEdit} onDelete={onDelete} />)}
-      </div>
+        <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden" }}>
+          {entries.map((e, i) => { const cat = categoryOf(categories, e.categoryId); return <button key={e.id} data-expense-id={e.id} onClick={() => onEdit(e)} aria-label={`עריכת ${e.description || cat.name}, ${fmt(e.amount)}`} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", minHeight: 68, padding: "12px 14px", textAlign: "right", color: COLORS.ink, background: "none", border: "none", borderBottom: i === entries.length - 1 ? "none" : `1px solid ${COLORS.mist}`, fontFamily: "inherit", cursor: "pointer" }}>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 15, fontWeight: 700, overflowWrap: "anywhere" }}>{e.description || cat.name}</div><div style={{ color: COLORS.sub, fontSize: 12.5, marginTop: 4 }}>{cat.name} · {e.user}</div></div>
+            <strong style={{ fontSize: 16, whiteSpace: "nowrap" }}>{fmt(e.amount)}</strong><span aria-hidden="true" style={{ color: COLORS.sub, fontSize: 20 }}>‹</span>
+          </button>; })}
+        </div>
+      </section>)}
     </div>
   );
 }
@@ -1778,8 +1896,48 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
                   ))}
                 </div>
               )}
-              <Row label="הוצאות קבועות (חיוב ישיר)" value={"-" + fmt(r.directFixedTotal)} />
-              {r.cashDirect > 0 && <Row label="קניות במזומן/ביט (חיוב ישיר באותו חודש)" value={"-" + fmt(r.cashDirect)} />}
+              <div style={{ background: COLORS.paper, borderRadius: 10, padding: "8px 10px", margin: "4px 0 8px" }}>
+                {!r.hasOverride && (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, fontWeight: 800 }}>
+                      <span>📎 הוצאות קבועות</span>
+                      <span style={{ color: COLORS.coral }}>-{fmt(r.directFixedTotal + r.cardLines.reduce((t, c) => t + c.total, 0) + r.creditFixedTotal)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.sub, lineHeight: 1.7, marginTop: 2 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}><span>· חיוב ישיר מהבנק</span><span>{fmt(r.directFixedTotal)}</span></div>
+                      {r.cardLines.map(cl => <div key={cl.card.id} style={{ display: "flex", justifyContent: "space-between" }}><span>· 💳 {cl.card.name || "כרטיס"} (יום {cl.day})</span><span>{fmt(cl.total)}</span></div>)}
+                      {r.creditFixedTotal > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>· 💳 קבועות באשראי ללא כרטיס משויך</span><span>{fmt(r.creditFixedTotal)}</span></div>}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, fontWeight: 800, marginTop: 8 }}>
+                      <span>🛒 הוצאות משתנות (תקציב)</span>
+                      <span style={{ color: COLORS.coral }}>-{fmt(r.cashDirect + r.autoVariableCredit)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.sub, lineHeight: 1.7, marginTop: 2 }}>
+                      {r.cashDirect > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>· מזומן/ביט (יורד מהבנק באותו חודש)</span><span>{fmt(r.cashDirect)}</span></div>}
+                      {r.autoVariableCredit > 0 && <div style={{ display: "flex", justifyContent: "space-between" }}><span>· באשראי (בתוך החיוב הגלובלי למטה)</span><span>{fmt(r.autoVariableCredit)}</span></div>}
+                    </div>
+                  </div>
+                )}
+                {r.hasOverride && (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, fontWeight: 800 }}>
+                      <span>📎 קבועות בחיוב ישיר</span>
+                      <span style={{ color: COLORS.coral }}>-{fmt(r.directFixedTotal)}</span>
+                    </div>
+                    {r.cashDirect > 0 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, fontWeight: 800, marginTop: 6 }}>
+                      <span>🛒 משתנות במזומן/ביט</span>
+                      <span style={{ color: COLORS.coral }}>-{fmt(r.cashDirect)}</span>
+                    </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13.5, fontWeight: 800, marginTop: 6 }}>
+                      <span>💳 אשראי (ידני)</span>
+                      <span style={{ color: COLORS.coral }}>-{fmt(r.creditLump)}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.sub, lineHeight: 1.6, marginTop: 2 }}>הסכום האשראי הידני כולל קבועות ומשתנות יחד, ללא פירוט; ניתן לעריכה ולסימון חלקי/סופי למטה</div>
+                  </div>
+                )}
+              </div>
               {r.cashAnchorPartial && (
                 <div role="note" style={{ fontSize: 12, color: "#8a6400", background: COLORS.amberLight, borderRadius: 8, padding: "6px 8px", margin: "4px 0", lineHeight: 1.5 }}>
                   ℹ️ קניות במזומן/ביט: נספרים {fmt(r.cashDirect)} מתוך {fmt(r.cashRaw)}, הערכה לפי פיזור שווה מה־{r.fromDay} בחודש והלאה. החלק שלפני כן משוקף כבר ביתרת הפתיחה{anchorInfo ? ` של ${anchorInfo.dateLabel}` : ""} ואינו נספר שוב.
@@ -1791,15 +1949,22 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
                   {r.ovrMeta && r.ovrMeta.status === "final" && <span style={{ fontSize: 10.5, fontWeight: 700, color: COLORS.sage, background: COLORS.sageLight, borderRadius: 6, padding: "1px 6px" }}>סופי</span>}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => onSetVariableOverride(r.key, e.target.value === "" ? null : Number(e.target.value))}
+                  <input key={r.key + "-" + r.creditLump} type="number" defaultValue={r.creditLump} onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    // מיקוד ויציאה בלי שינוי לא יוצרים עקיפה ידנית, כדי שהאומדן האוטומטי ימשיך להתעדכן.
+                    // ניקוי השדה מאפס לאומדן האוטומטי; שינוי ערך בפועל שומר עקיפה ידנית כרגיל.
+                    if (raw === "") { onSetVariableOverride(r.key, null); return; }
+                    const v = Number(raw);
+                    if (!Number.isFinite(v) || v === r.creditLump) return;
+                    onSetVariableOverride(r.key, v);
+                  }}
                     style={{ width: 80, padding: "3px 6px", borderRadius: 6, border: `1px solid ${COLORS.mist}`, fontSize: 12.5, textAlign: "center" }} />
                   {r.hasOverride && <button onClick={() => onSetVariableOverride(r.key, null)} style={{ border: "none", background: "none", color: COLORS.sage, fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>איפוס</button>}
                 </span>
               </div>
               {r.cardLines.length > 0 && (
                 <div style={{ fontSize: 11.5, color: COLORS.sub, padding: "0 0 4px", lineHeight: 1.6 }}>
-                  <div>מתוך סך האשראי: גלובלי {fmt(r.globalCredit)}</div>
-                  {r.cardLines.map(cl => <div key={cl.card.id}>💳 {cl.card.name || "כרטיס"}: {fmt(cl.total)} · יום {cl.day} (הערכה)</div>)}
+                  <div>מתוך סך האשראי: גלובלי {fmt(r.globalCredit)} ({fmt(r.creditFixedTotal)} קבועות + {fmt(r.autoVariableCredit)} משתנה) · פירוט הכרטיסים למעלה תחת 📎 קבועות</div>
                 </div>
               )}
               {r.sourceCash > 0 && (
@@ -2036,8 +2201,8 @@ function AdviceTab({ monthDate, perCategory, totalBudget, totalSpent, fixedExpen
     ADVICE_INFLIGHT[reqPeriod] = true;
     setReq({ period: reqPeriod, status: "loading" });
     try {
-      const res = await fetch("/.netlify/functions/financial-advice", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const res = await fetch("/api/financial-advice", {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Requested-With": "fb" },
         body: JSON.stringify({ ...reqPayload, daysPassed, daysInMonth: dim }),
       });
       const json = await res.json().catch(() => ({}));
@@ -2140,7 +2305,16 @@ function BudgetTab({ categories, monthBudgets, budgetInfo, onSetBudget, onAddCat
             ) : (
               <span onClick={() => setEditingId(c.id)} style={{ flex: 1, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>{c.name}</span>
             )}
-            <input key={c.id + "-" + (explicit ? "exp" : "inh")} type="number" placeholder={explicit ? "0" : String(Number(effectiveMap[c.id]) || 0)} defaultValue={explicit ? (monthBudgets[c.id] || "") : ""} onBlur={(e) => onSetBudget(c.id, Number(e.target.value) || 0)}
+            <input key={c.id + "-" + (explicit ? "exp" : "inh")} type="number" placeholder={explicit ? "0" : String(Number(effectiveMap[c.id]) || 0)} defaultValue={explicit ? (monthBudgets[c.id] || "") : ""} onBlur={(e) => {
+              const raw = e.target.value.trim();
+              // מיקוד ויציאה בלי הקלדה לא שומרים: בחודש יורש נשמרת הירושה, ובחודש מפורש נשמר הערך הקיים.
+              // הקלדת ערך (כולל 0 מפורש) נשמרת כרגיל; ניקוי ערך קיים בחודש מפורש שומר 0 כמו קודם.
+              if (raw === "") { if (explicit && monthBudgets[c.id] !== undefined) onSetBudget(c.id, 0); return; }
+              const v = Number(raw);
+              if (!Number.isFinite(v)) return;
+              if (explicit && monthBudgets[c.id] !== undefined && v === Number(monthBudgets[c.id])) return;
+              onSetBudget(c.id, v);
+            }}
               style={{ width: 82, padding: "7px 8px", borderRadius: 8, border: `1px solid ${COLORS.mist}`, fontSize: 13, textAlign: "center" }} />
             <span style={{ fontSize: 11.5, color: COLORS.sub }}>₪</span>
             <button onClick={() => onRemoveCategory(c.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
@@ -2212,7 +2386,8 @@ function BudgetTab({ categories, monthBudgets, budgetInfo, onSetBudget, onAddCat
 }
 
 /* ================= EXPENSE MODAL ================= */
-function ExpenseModal({ categories, user, initial, onClose, onSave }) {
+function ExpenseModal({ categories, user, initial, onClose, onSave, onDelete }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [amount, setAmount] = useState(initial?.amount ?? "");
   const [categoryId, setCategoryId] = useState(initial?.categoryId ?? categories[0]?.id ?? "");
   const [date, setDate] = useState(initial?.date ?? todayISO());
@@ -2225,7 +2400,7 @@ function ExpenseModal({ categories, user, initial, onClose, onSave }) {
       <div onClick={e => e.stopPropagation()} style={{ background: "#fff", width: "100%", borderRadius: "20px 20px 0 0", padding: "18px 18px 26px", maxHeight: "88vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 800, fontSize: 18 }}>{initial ? "עריכת הוצאה" : "הוצאה חדשה"}</div>
-          <button onClick={onClose} style={iconBtnStyle}>✕</button>
+          <button onClick={onClose} aria-label="סגירת עריכת הוצאה" style={{ ...iconBtnStyle, width: 44, height: 44 }}>✕</button>
         </div>
         <label style={labelStyle}>סכום</label>
         <input autoFocus type="number" inputMode="decimal" placeholder="0" value={amount} onChange={e => setAmount(e.target.value)}
@@ -2246,6 +2421,12 @@ function ExpenseModal({ categories, user, initial, onClose, onSave }) {
         <input placeholder="למשל: קניות שבועיות" value={description} onChange={e => setDescription(e.target.value)} style={{ ...inputStyle, marginBottom: 20 }} />
         <button disabled={!canSave} onClick={() => onSave({ id: initial?.id, amount: Number(amount), categoryId, date, description, user: who })}
           style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", background: canSave ? COLORS.sage : COLORS.mist, color: "#fff", fontWeight: 800, fontSize: 15, cursor: canSave ? "pointer" : "default" }}>שמירה</button>
+        {initial && onDelete && <div style={{ marginTop: 14 }}>
+          {!confirmDelete ? <button onClick={() => setConfirmDelete(true)} style={{ width: "100%", minHeight: 44, border: "none", borderRadius: 10, background: COLORS.paper, color: COLORS.coral, fontFamily: "inherit", fontSize: 14 }}>מחיקת ההוצאה</button> : <div style={{ background: COLORS.paper, borderRadius: 12, padding: 12 }}>
+            <div style={{ fontSize: 14, marginBottom: 10 }}>למחוק את "{initial.description || categoryOf(categories, initial.categoryId).name}" ({fmt(initial.amount)})?</div>
+            <div style={{ display: "flex", gap: 8 }}><button onClick={() => setConfirmDelete(false)} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "white", fontFamily: "inherit" }}>ביטול</button><button onClick={() => onDelete(initial.id)} style={{ flex: 1, minHeight: 44, borderRadius: 10, border: "none", color: "white", background: COLORS.coral, fontFamily: "inherit" }}>אישור מחיקה</button></div>
+          </div>}
+        </div>}
       </div>
     </div>
   );
