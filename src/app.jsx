@@ -25,11 +25,12 @@ const DEFAULT_CATEGORIES = [
 ];
 const ICON_OPTIONS = ["🛒","🍽️","🎉","🛍️","⛽","🚗","🧸","🏠","💊","👕","📦","💡","📱","🎓","✈️","🐾","🎁","☕","🏋️","💇"];
 const HEBREW_MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const APP_VERSION = "44";
-const APP_VERSION_DATE = "1.11.2026";
+const APP_VERSION = "45";
+const APP_VERSION_DATE = "2.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [
+  { v: "45", date: "2.11.2026", changes: ["הוצאות מתוכננות גם ללא תאריך, ברשימה נפרדת וגלויה", "אפשר להוסיף או לשנות תאריך בהמשך; הוצאות ללא תאריך אינן נכללות בתחזית עד לקביעת תאריך"] },
   { v: "44", date: "1.11.2026", changes: ["תחושת לחיצה טבעית: כל כפתור מגיב מיד בלחיצה (התכווצות עדינה והדגשה), בלי אנימציות מיותרות"] },
   { v: "43", date: "1.11.2026", changes: ["אפשרות \"שכח שם זה\" בתפריט \"עוד\": הסרת שמות שנשמרו במכשיר הזה למסך הכניסה, בלי יציאה מהאתר ובלי שינוי בנתונים"] },
   { v: "42", date: "1.11.2026", changes: ["לוגו במסכי הכניסה: \"ניהול פיננסי\" עם סמל, ואחרי הזנת הקוד — \"ניהול פיננסי של \" + שם המשפחה; כשלא הוגדר שם משפחה הנוסח נשאר כללי"] },
@@ -723,7 +724,7 @@ function BudgetApp() {
   const overallPct = pct(totalSpent, totalBudget);
   const activeFixed = data.fixedExpenses.filter(f => f.active !== false);
   const totalFixed = fixedTotalForMonth(data.fixedExpenses, mKey);
-  const monthPlanned = useMemo(() => data.plannedExpenses.filter(p => p.date && p.date.startsWith(mKey)), [data.plannedExpenses, mKey]);
+  const monthPlanned = useMemo(() => data.plannedExpenses.filter(p => plannedDateOk(p) && p.date.startsWith(mKey)), [data.plannedExpenses, mKey]);
   const totalPlanned = monthPlanned.reduce((s, p) => s + Number(p.amount || 0), 0);
 
   const now = new Date();
@@ -867,7 +868,11 @@ function BudgetApp() {
   };
 
   const addPlanned = async (name, amount, date) => {
-    await persist({ ...data, plannedExpenses: [...data.plannedExpenses, { id: uid(), name, amount: round2(amount), date }] });
+    return await persist({ ...dataRef.current, plannedExpenses: [...dataRef.current.plannedExpenses, { id: uid(), name, amount: round2(amount), date: date || "" }] });
+  };
+  const updatePlannedDate = async (id, date) => {
+    const cur = dataRef.current;
+    return await persist({ ...cur, plannedExpenses: cur.plannedExpenses.map(p => p.id === id ? { ...p, date: date || "" } : p) });
   };
   const removePlanned = async (id) => {
     await persist({ ...data, plannedExpenses: data.plannedExpenses.filter(p => p.id !== id) });
@@ -954,7 +959,7 @@ function BudgetApp() {
         )}
         {tab === "fixed" && (
           <FixedExpensesTab fixedExpenses={data.fixedExpenses} onAdd={addFixedExpense} onUpdate={updateFixedExpense} onRemove={removeFixedExpense} onSplit={splitFixedExpense} cards={data.settings.cards || []}
-            plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onRemovePlanned={removePlanned} monthDate={monthDate} />
+            plannedExpenses={data.plannedExpenses} onAddPlanned={addPlanned} onUpdatePlannedDate={updatePlannedDate} onRemovePlanned={removePlanned} monthDate={monthDate} />
         )}
         {tab === "forecast" && (
           <ForecastTab monthDate={monthDate} totalBudget={totalBudget} fixedExpenses={data.fixedExpenses} plannedExpenses={data.plannedExpenses}
@@ -1672,7 +1677,7 @@ function FixedPeriodPanel({ f, mKey, siblings, onUpdate, onSplit, onClose }) {
 }
 
 /* ================= FIXED EXPENSES TAB ================= */
-function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, cards, plannedExpenses, onAddPlanned, onRemovePlanned, monthDate }) {
+function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, cards, plannedExpenses, onAddPlanned, onUpdatePlannedDate, onRemovePlanned, monthDate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
@@ -1695,17 +1700,6 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
   const total = fixedTotalForMonth(fixedExpenses, mKey);
 
   const reset = () => { setName(""); setAmount(""); setDueDay("1"); setFreq("1"); setFromM(""); setToM(""); setAddErr(""); setAddCredit(false); setAddCard(""); setAdding(false); };
-
-  const [addingPlanned, setAddingPlanned] = useState(false);
-  const [pName, setPName] = useState("");
-  const [pAmount, setPAmount] = useState("");
-  const [pDate, setPDate] = useState(todayISO());
-  const plannedDateOk = (p) => typeof p.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.date);
-  const upcomingPlanned = plannedExpenses.filter(p => plannedDateOk(p) && p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date));
-  // מתוכננות שעברו (או בלי תאריך תקין) נשמרות גלויות וניתנות למחיקה, במקום להיעלם מהממשק
-  const pastPlanned = plannedExpenses.filter(p => !plannedDateOk(p) || p.date < mKey + "-01").sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-  const [showPastPlanned, setShowPastPlanned] = useState(false);
-  const resetPlanned = () => { setPName(""); setPAmount(""); setPDate(todayISO()); setAddingPlanned(false); };
 
   const renderFixedFull = (f, i, list) => (
           <div key={f.id} className="fx-card" style={{ borderBottom: i === list.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
@@ -1856,39 +1850,91 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
         </div>
       )}
 
+      <PlannedExpensesSection plannedExpenses={plannedExpenses} onAddPlanned={onAddPlanned} onUpdatePlannedDate={onUpdatePlannedDate} onRemovePlanned={onRemovePlanned} monthDate={monthDate} />
+      <div style={{ height: 80 }} />
+    </div>
+  );
+}
+
+
+// Undated records stay visible, but never receive an invented forecast date.
+function plannedDateOk(p) {
+  if (typeof p.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(p.date)) return false;
+  const [y, m, d] = p.date.split("-").map(Number);
+  const t = new Date(y, m - 1, d);
+  return t.getFullYear() === y && t.getMonth() === m - 1 && t.getDate() === d;
+}
+function groupPlannedExpenses(items, mKey) {
+  return {
+    upcoming: items.filter(p => plannedDateOk(p) && p.date >= mKey + "-01").sort((a, b) => a.date.localeCompare(b.date)),
+    past: items.filter(p => plannedDateOk(p) && p.date < mKey + "-01").sort((a, b) => b.date.localeCompare(a.date)),
+    undated: items.filter(p => !plannedDateOk(p)),
+  };
+}
+function PlannedExpensesSection({ plannedExpenses, onAddPlanned, onUpdatePlannedDate, onRemovePlanned, monthDate }) {
+  const mKey = monthKey(monthDate);
+  const [addingPlanned, setAddingPlanned] = useState(false);
+  const [pName, setPName] = useState("");
+  const [pAmount, setPAmount] = useState("");
+  const [pDate, setPDate] = useState("");
+  const { upcoming: upcomingPlanned, past: pastPlanned, undated: undatedPlanned } = groupPlannedExpenses(plannedExpenses, mKey);
+  const [editingDateId, setEditingDateId] = useState(null);
+  const [dateDraft, setDateDraft] = useState("");
+  const [plannedBusy, setPlannedBusy] = useState(false);
+  const [plannedError, setPlannedError] = useState("");
+  const saveDate = async (id) => {
+    setPlannedBusy(true); setPlannedError("");
+    try {
+      if (await onUpdatePlannedDate(id, dateDraft) !== false) setEditingDateId(null);
+      else setPlannedError("התאריך לא נשמר. נסו שוב.");
+    } catch { setPlannedError("התאריך לא נשמר. נסו שוב."); }
+    finally { setPlannedBusy(false); }
+  };
+  const [showPastPlanned, setShowPastPlanned] = useState(false);
+  const resetPlanned = () => { setPName(""); setPAmount(""); setPDate(""); setAddingPlanned(false); };
+
+
+  const renderPlanned = (p) => <div key={p.id} style={{ padding: "11px 14px", borderBottom: `1px solid ${COLORS.mist}` }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, overflowWrap: "anywhere" }}>{p.name}</div>
+        <button disabled={plannedBusy} onClick={() => { setEditingDateId(p.id); setDateDraft(plannedDateOk(p) ? p.date : ""); setPlannedError(""); }} aria-label={(plannedDateOk(p) ? "שינוי תאריך: " : "הוספת תאריך: ") + p.name} style={{ border: "none", background: "none", padding: "8px 0", color: COLORS.sage, fontSize: 12, cursor: "pointer", minHeight: 36 }}>
+          {plannedDateOk(p) ? p.date.split("-").reverse().join("/") + " · שינוי תאריך" : "ללא תאריך · הוספת תאריך"}
+        </button>
+      </div>
+      <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: "nowrap" }}>{fmt(p.amount)}</div>
+      <button disabled={plannedBusy} onClick={() => onRemovePlanned(p.id)} aria-label={"מחיקת " + p.name} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
+    </div>
+    {editingDateId === p.id && <div style={{ marginTop: 8 }}>
+      <label style={labelStyle}>תאריך (לא חובה)</label>
+      <input aria-label={"תאריך עבור " + p.name} type="date" value={dateDraft} disabled={plannedBusy} onChange={e => setDateDraft(e.target.value)} style={{ ...inputStyle, marginBottom: 8 }} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button disabled={plannedBusy || (dateDraft !== "" && !plannedDateOk({ date: dateDraft }))} onClick={() => saveDate(p.id)} style={{ ...iconBtnStyle, width: "auto", padding: "8px 12px", background: COLORS.sage, color: "white", fontSize: 13 }}>{plannedBusy ? "שומר…" : "שמירת תאריך"}</button>
+        <button disabled={plannedBusy} onClick={() => setEditingDateId(null)} style={{ ...iconBtnStyle, width: "auto", padding: "8px 12px", fontSize: 13 }}>ביטול</button>
+        {dateDraft && <button disabled={plannedBusy} onClick={() => setDateDraft("")} style={{ ...iconBtnStyle, width: "auto", padding: "8px 12px", fontSize: 12 }}>ללא תאריך</button>}
+      </div>
+    </div>}
+  </div>;
+  return <>
       <div style={{ fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15, margin: "22px 2px 10px" }}>הוצאות מתוכננות (חד-פעמיות)</div>
-      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 10 }}>הוצאה עתידית בתאריך ידוע — תשתקף בטאב התחזית בחודש הרלוונטי</div>
+      <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 10 }}>אפשר לשמור גם בלי תאריך ולהוסיף אותו בהמשך. רק הוצאות עם תאריך נכללות בתחזית.</div>
       <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", marginBottom: 14 }}>
         {upcomingPlanned.length === 0 && <div style={{ padding: 18, textAlign: "center", color: COLORS.sub, fontSize: 13 }}>אין הוצאות מתוכננות קרובות</div>}
-        {upcomingPlanned.map((p, i) => (
-          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === upcomingPlanned.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
-            <div style={{ fontSize: 18 }}>📌</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</div>
-              <div style={{ fontSize: 11, color: COLORS.sub }}>{p.date.split("-").reverse().join("/")}</div>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmt(p.amount)}</div>
-            <button onClick={() => onRemovePlanned(p.id)} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
-          </div>
-        ))}
+        {upcomingPlanned.map(renderPlanned)}
       </div>
+      {undatedPlanned.length > 0 && <div style={{ marginBottom: 14 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>ללא תאריך ({undatedPlanned.length}) · {fmt(undatedPlanned.reduce((sum, p) => sum + Number(p.amount || 0), 0))}</div>
+        <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 8 }}>לא נכללות בתחזית עד לקביעת תאריך</div>
+        <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden" }}>{undatedPlanned.map(renderPlanned)}</div>
+      </div>}
+      {plannedError && <div role="alert" style={{ color: COLORS.coral, fontSize: 13, marginBottom: 10 }}>{plannedError}</div>}
 
       {pastPlanned.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <button onClick={() => setShowPastPlanned(v => !v)} aria-expanded={showPastPlanned} style={{ border: "none", background: "none", fontSize: 13, fontWeight: 700, color: COLORS.sub, cursor: "pointer", minHeight: 40, padding: "0 2px" }}>
             {showPastPlanned ? "▴" : "▾"} מתוכננות שעברו ({pastPlanned.length})
           </button>
-          {showPastPlanned && <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", opacity: 0.9 }}>{pastPlanned.map((p, i) => (
-            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: i === pastPlanned.length - 1 ? "none" : `1px solid ${COLORS.mist}` }}>
-              <div style={{ fontSize: 18 }}>📌</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: COLORS.sub }}>{plannedDateOk(p) ? p.date.split("-").reverse().join("/") : "ללא תאריך"}</div>
-              </div>
-              <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fmt(p.amount)}</div>
-              <button onClick={() => onRemovePlanned(p.id)} aria-label={"מחיקת " + (p.name || "הוצאה מתוכננת")} style={{ ...iconBtnStyle, color: COLORS.coral }}>🗑</button>
-            </div>
-          ))}</div>}
+          {showPastPlanned && <div style={{ background: COLORS.card, borderRadius: 16, overflow: "hidden", opacity: 0.9 }}>{pastPlanned.map(renderPlanned)}</div>}
         </div>
       )}
 
@@ -1904,20 +1950,19 @@ function FixedExpensesTab({ fixedExpenses, onAdd, onUpdate, onRemove, onSplit, c
               <input type="number" placeholder="0" value={pAmount} onChange={e => setPAmount(e.target.value)} style={inputStyle} />
             </div>
             <div style={{ flex: 1 }}>
-              <label style={labelStyle}>תאריך</label>
-              <input type="date" value={pDate} onChange={e => setPDate(e.target.value)} style={inputStyle} />
+              <label style={labelStyle}>תאריך (לא חובה)</label>
+              <input aria-label="תאריך ההוצאה המתוכננת (לא חובה)" type="date" value={pDate} onChange={e => setPDate(e.target.value)} style={inputStyle} />
             </div>
           </div>
+          {pDate && <button onClick={() => setPDate("")} style={{ ...iconBtnStyle, width: "auto", fontSize: 12, marginBottom: 8 }}>ניקוי התאריך</button>}
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={resetPlanned} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
-            <button disabled={!pName.trim() || !Number(pAmount) || !/^\d{4}-\d{2}-\d{2}$/.test(pDate || "")} onClick={() => { onAddPlanned(pName.trim(), Number(pAmount), pDate); resetPlanned(); }}
+            <button disabled={plannedBusy} onClick={resetPlanned} style={{ flex: 1, padding: "10px", borderRadius: 10, border: `1px solid ${COLORS.mist}`, background: "#fff", cursor: "pointer", fontSize: 13 }}>ביטול</button>
+            <button disabled={plannedBusy || !pName.trim() || !Number.isFinite(Number(pAmount)) || Number(pAmount) <= 0 || (pDate !== "" && !plannedDateOk({ date: pDate }))} onClick={async () => { setPlannedBusy(true); setPlannedError(""); try { if (await onAddPlanned(pName.trim(), Number(pAmount), pDate) !== false) resetPlanned(); else setPlannedError("ההוצאה לא נשמרה. נסו שוב."); } catch { setPlannedError("ההוצאה לא נשמרה. נסו שוב."); } finally { setPlannedBusy(false); } }}
               style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: COLORS.sage, color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>שמירה</button>
           </div>
         </div>
       )}
-      <div style={{ height: 80 }} />
-    </div>
-  );
+  </>;
 }
 
 /* ================= RECURRING INCOMES ================= */
@@ -2111,7 +2156,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
     const directFixed = directFixedAll.filter(f => inRange(f.dueDay));
     const directFixedTotal = directFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
     const creditFixedTotal = creditFixed.reduce((s, f) => s + Number(f.amount || 0), 0);
-    const plannedForMonth = plannedExpenses.filter(p => p.date && p.date.startsWith(m.key) && inRange(p.date.split("-")[2]));
+    const plannedForMonth = plannedExpenses.filter(p => plannedDateOk(p) && p.date.startsWith(m.key) && inRange(p.date.split("-")[2]));
     const plannedTotal = plannedForMonth.reduce((s, p) => s + Number(p.amount || 0), 0);
     const sourceMonthDate = new Date(monthDate.getFullYear(), monthDate.getMonth() + m.offset - (creditLag ? 1 : 0), 1);
     const sourceMonthKey = monthKey(sourceMonthDate);
@@ -2208,6 +2253,7 @@ function ForecastTab({ monthDate, totalBudget, fixedExpenses, plannedExpenses, i
   return (
     <div>
       <div style={{ margin: "6px 2px 4px", fontFamily: "Heebo, sans-serif", fontWeight: 700, fontSize: 15 }}>תחזית 6 חודשים</div>
+      {plannedExpenses.some(p => !plannedDateOk(p)) && <div role="note" style={{ fontSize: 12, color: COLORS.sub, margin: "8px 2px", lineHeight: 1.5 }}>יש {plannedExpenses.filter(p => !plannedDateOk(p)).length} הוצאות מתוכננות ללא תאריך, בסך {fmt(plannedExpenses.filter(p => !plannedDateOk(p)).reduce((sum, p) => sum + Number(p.amount || 0), 0))}. הן אינן נכללות בתחזית עד לקביעת תאריך במסך ההוצאות הקבועות.</div>}
       <div style={{ fontSize: 12, color: COLORS.sub, marginBottom: 12 }}>
         לחיצה על חודש בטבלה פותחת את הפירוט היומי המלא, כולל הנקודה הנמוכה בחודש
       </div>
