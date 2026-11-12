@@ -78,11 +78,15 @@ const DEFAULT_CATEGORIES = [{
 }];
 const ICON_OPTIONS = ["🛒", "🍽️", "🎉", "🛍️", "⛽", "🚗", "🧸", "🏠", "💊", "👕", "📦", "💡", "📱", "🎓", "✈️", "🐾", "🎁", "☕", "🏋️", "💇"];
 const HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
-const APP_VERSION = "45";
-const APP_VERSION_DATE = "2.11.2026";
+const APP_VERSION = "46";
+const APP_VERSION_DATE = "12.11.2026";
 const APP_CREDIT = "נבנה על ידי גולן חכם";
 /* היסטוריית גרסאות — מתעדכן בכל פרסום, החדשה למעלה */
 const RELEASES = [{
+  v: "46",
+  date: "12.11.2026",
+  changes: ["משיכות מזומן מתוארכות במסך התחזית: הירידה נרשמת ביום המשיכה עצמו, וההערכה החודשית המפוזרת מקוזזת כדי שהכסף לא ייספר פעמיים"]
+}, {
   v: "45",
   date: "2.11.2026",
   changes: ["הוצאות מתוכננות גם ללא תאריך, ברשימה נפרדת וגלויה", "אפשר להוסיף או לשנות תאריך בהמשך; הוצאות ללא תאריך אינן נכללות בתחזית עד לקביעת תאריך"]
@@ -290,6 +294,7 @@ const EMPTY_DATA = {
   incomeEntries: [],
   recurringIncomes: [],
   plannedExpenses: [],
+  cashWithdrawals: [],
   settings: {
     creditLag: false,
     openingBalance: 0,
@@ -326,6 +331,7 @@ function normalizeData(d) {
     incomeEntries: moneyList(d.incomeEntries, ["amount"]),
     recurringIncomes: moneyList(d.recurringIncomes, ["amount", "bonusAmount"]),
     plannedExpenses: moneyList(d.plannedExpenses, ["amount"]),
+    cashWithdrawals: moneyList(d.cashWithdrawals, ["amount"]),
     settings: {
       creditLag: false,
       openingBalance: 0,
@@ -406,6 +412,14 @@ function cashBudgetForMonth(cashBudgets, mKey) {
     sourceKey: null,
     explicit: false
   };
+}
+// הערכת המזומן המפוזרת לחודש: חלק המזומן של התקציב בקיזוז משיכות מתוארכות שכבר נרשמו באותו
+// חודש, כדי שאותו כסף לא יירד מהבנק פעמיים — פעם ביום המשיכה ופעם בפיזור היומי.
+// משיכות מעבר לחלק המזומן של התקציב אינן הופכות את ההערכה לשלילית.
+function cashEstimateForMonth(cashRaw, withdrawalsTotal) {
+  const raw = Math.max(Number(cashRaw) || 0, 0);
+  const wd = Math.max(Number(withdrawalsTotal) || 0, 0);
+  return Math.max(raw - wd, 0);
 }
 function monthsDiff(aKey, bKey) {
   const [ay, am] = aKey.split("-").map(Number);
@@ -2008,6 +2022,23 @@ function BudgetApp() {
       plannedExpenses: data.plannedExpenses.filter(p => p.id !== id)
     });
   };
+  const addWithdrawal = async (amount, date, note) => {
+    return await persist({
+      ...dataRef.current,
+      cashWithdrawals: [...(dataRef.current.cashWithdrawals || []), {
+        id: uid(),
+        amount: round2(amount),
+        date,
+        note: (note || "").trim()
+      }]
+    });
+  };
+  const removeWithdrawal = async id => {
+    await persist({
+      ...dataRef.current,
+      cashWithdrawals: (dataRef.current.cashWithdrawals || []).filter(w => w.id !== id)
+    });
+  };
   const toggleCreditLag = async () => {
     await persist({
       ...data,
@@ -2341,7 +2372,10 @@ function BudgetApp() {
     onSetVariableOverride: setVariableOverride,
     variableOverrideMeta: data.settings.variableOverrideMeta || {},
     onSetVariableOverrideMeta: setVariableOverrideMeta,
-    cashBudgets: data.settings.cashBudgets || {}
+    cashBudgets: data.settings.cashBudgets || {},
+    cashWithdrawals: data.cashWithdrawals || [],
+    onAddWithdrawal: addWithdrawal,
+    onRemoveWithdrawal: removeWithdrawal
   }), tab === "budget" && /*#__PURE__*/React.createElement(BudgetTab, {
     key: mKey,
     categories: data.categories,
@@ -5959,7 +5993,10 @@ function ForecastTab({
   onSaveRecurring,
   onAddOverride,
   onLinkEntries,
-  cashBudgets
+  cashBudgets,
+  cashWithdrawals,
+  onAddWithdrawal,
+  onRemoveWithdrawal
 }) {
   const [openMonth, setOpenMonth] = useState(null);
   const [srcDraft, setSrcDraft] = useState("");
@@ -5971,6 +6008,12 @@ function ForecastTab({
   const [newCardName, setNewCardName] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [warnOpen, setWarnOpen] = useState(false);
+  const [withdrawalsOpen, setWithdrawalsOpen] = useState(false);
+  const [wAmount, setWAmount] = useState("");
+  const [wDate, setWDate] = useState("");
+  const [wNote, setWNote] = useState("");
+  const [wBusy, setWBusy] = useState(false);
+  const [wErr, setWErr] = useState("");
 
   // עוגן יתרה עם תאריך: היתרה מתייחסת לתחילת היום שנבחר (לפני התנועות של אותו יום),
   // והחישוב סופר רק תנועות מהתאריך הזה והלאה, כי תנועות קודמות כבר משוקפות ביתרה.
@@ -6037,11 +6080,18 @@ function ForecastTab({
     const sourceCash = cashOf(sourceMonthKey, autoVariableSpend);
     const autoVariableCredit = autoVariableSpend - sourceCash;
     const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key));
+    // משיכות מזומן מתוארכות: יורדות מהבנק ביום המשיכה עצמו ומקוזזות מההערכה המפוזרת של אותו חודש,
+    // כדי שאותו כסף לא ייספר פעמיים. משיכה לפני יום העוגן כבר משוקפת ביתרה ואינה אירוע, אבל עדיין מקוזזת.
+    const withdrawalsAll = (cashWithdrawals || []).filter(w => typeof w.date === "string" && w.date.startsWith(m.key));
+    const withdrawalsTotal = withdrawalsAll.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+    const monthWithdrawals = withdrawalsAll.filter(w => inRange(Number(String(w.date).split("-")[2])));
+    const withdrawalsInRange = monthWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+    const cashEstimate = cashEstimateForMonth(cashRaw, withdrawalsTotal);
     // עוגן מתוארך (תחילת היום, כולל אותו יום): היתרה כבר משקפת תנועות שלפני יום העוגן, ולכן קניות המזומן נספרות
     // רק באופן יחסי מהיום הזה והלאה - כמו שאר התנועות המסוננות לפי fromDay. עוגן ביום 1 = כל החודש נספר.
     const cashAnchorDays = isAnchorMonth ? Math.max(dim - fromDay + 1, 0) : dim;
-    const cashAnchorPartial = isAnchorMonth && cashRaw > 0 && cashAnchorDays < dim;
-    const cashDirect = cashRaw * cashAnchorDays / dim;
+    const cashAnchorPartial = isAnchorMonth && cashEstimate > 0 && cashAnchorDays < dim;
+    const cashDirect = cashEstimate * cashAnchorDays / dim;
     const autoCreditLump = creditFixedTotal + autoVariableCredit;
     const hasOverride = variableOverrides && Object.prototype.hasOwnProperty.call(variableOverrides, m.key);
     const ovrMeta = hasOverride ? (variableOverrideMeta || {})[m.key] || null : null;
@@ -6054,7 +6104,7 @@ function ForecastTab({
     const unscheduled = hasOverride ? [] : cardInfo.unscheduled;
     const partial = unscheduled.length > 0;
     const creditLump = (includeGlobalCredit ? globalCredit : 0) + cardTotal;
-    const balance = income - directFixedTotal - creditLump - cashDirect - plannedTotal;
+    const balance = income - directFixedTotal - creditLump - cashDirect - plannedTotal - withdrawalsInRange;
 
     // build day-by-day timeline
     const events = [];
@@ -6077,6 +6127,11 @@ function ForecastTab({
       day: Number(p.date.split("-")[2]) || 1,
       label: `📌 ${p.name}`,
       amount: -(Number(p.amount) || 0)
+    }));
+    monthWithdrawals.forEach(w => events.push({
+      day: clampDay(Number(String(w.date).split("-")[2])),
+      label: `🏧 משיכת מזומן${w.note ? ` · ${w.note}` : ""}`,
+      amount: -(Number(w.amount) || 0)
     }));
     if (includeGlobalCredit && globalCredit > 0) {
       const ovrStatusLabel = ovrMeta && ovrMeta.status === "partial" ? " · חלקי" : ovrMeta && ovrMeta.status === "final" ? " · סופי" : "";
@@ -6107,6 +6162,10 @@ function ForecastTab({
       sourceCash,
       autoVariableCredit,
       cashRaw,
+      cashEstimate,
+      withdrawalsTotal,
+      monthWithdrawals,
+      withdrawalsInRange,
       cashDirect,
       cashAnchorPartial,
       cashAnchorDays,
@@ -6700,12 +6759,41 @@ function ForecastTab({
       display: "flex",
       justifyContent: "space-between"
     }
-  }, /*#__PURE__*/React.createElement("span", null, "· מזומן/ביט (יורד מהבנק באותו חודש)"), /*#__PURE__*/React.createElement("span", null, fmt(r.cashDirect))), r.autoVariableCredit > 0 && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "· מזומן/ביט (יורד מהבנק באותו חודש)", r.withdrawalsTotal > 0 ? ", לאחר קיזוז המשיכות" : ""), /*#__PURE__*/React.createElement("span", null, fmt(r.cashDirect))), r.autoVariableCredit > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between"
     }
-  }, /*#__PURE__*/React.createElement("span", null, "· באשראי (בתוך החיוב הגלובלי למטה)"), /*#__PURE__*/React.createElement("span", null, fmt(r.autoVariableCredit))))), r.hasOverride && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("span", null, "· באשראי (בתוך החיוב הגלובלי למטה)"), /*#__PURE__*/React.createElement("span", null, fmt(r.autoVariableCredit)))), r.monthWithdrawals.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      fontSize: 13.5,
+      fontWeight: 800
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "🏧 משיכות מזומן"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.coral
+    }
+  }, "-", fmt(r.withdrawalsInRange))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: COLORS.sub,
+      lineHeight: 1.7,
+      marginTop: 2
+    }
+  }, r.monthWithdrawals.map(w => /*#__PURE__*/React.createElement("div", {
+    key: w.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "· ", String(w.date).split("-").reverse().join("/"), w.note ? ` · ${w.note}` : ""), /*#__PURE__*/React.createElement("span", null, fmt(w.amount))))))), r.hasOverride && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -6750,7 +6838,36 @@ function ForecastTab({
       lineHeight: 1.6,
       marginTop: 2
     }
-  }, "הסכום האשראי הידני כולל קבועות ומשתנות יחד, ללא פירוט; ניתן לעריכה ולסימון חלקי/סופי למטה"))), r.cashAnchorPartial && /*#__PURE__*/React.createElement("div", {
+  }, "הסכום האשראי הידני כולל קבועות ומשתנות יחד, ללא פירוט; ניתן לעריכה ולסימון חלקי/סופי למטה"), r.monthWithdrawals.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      fontSize: 13.5,
+      fontWeight: 800
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "🏧 משיכות מזומן"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.coral
+    }
+  }, "-", fmt(r.withdrawalsInRange))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: COLORS.sub,
+      lineHeight: 1.7,
+      marginTop: 2
+    }
+  }, r.monthWithdrawals.map(w => /*#__PURE__*/React.createElement("div", {
+    key: w.id,
+    style: {
+      display: "flex",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "· ", String(w.date).split("-").reverse().join("/"), w.note ? ` · ${w.note}` : ""), /*#__PURE__*/React.createElement("span", null, fmt(w.amount)))))))), r.cashAnchorPartial && /*#__PURE__*/React.createElement("div", {
     role: "note",
     style: {
       fontSize: 12,
@@ -6761,7 +6878,7 @@ function ForecastTab({
       margin: "4px 0",
       lineHeight: 1.5
     }
-  }, "ℹ️ קניות במזומן/ביט: נספרים ", fmt(r.cashDirect), " מתוך ", fmt(r.cashRaw), ", הערכה לפי פיזור שווה מה־", r.fromDay, " בחודש והלאה. החלק שלפני כן משוקף כבר ביתרת הפתיחה", anchorInfo ? ` של ${anchorInfo.dateLabel}` : "", " ואינו נספר שוב."), /*#__PURE__*/React.createElement("div", {
+  }, "ℹ️ קניות במזומן/ביט: נספרים ", fmt(r.cashDirect), " מתוך ", fmt(r.cashEstimate), r.withdrawalsTotal > 0 ? ` (לאחר קיזוז משיכות בסך ${fmt(r.withdrawalsTotal)} מתוך ${fmt(r.cashRaw)})` : "", ", הערכה לפי פיזור שווה מה־", r.fromDay, " בחודש והלאה. החלק שלפני כן משוקף כבר ביתרת הפתיחה", anchorInfo ? ` של ${anchorInfo.dateLabel}` : "", " ואינו נספר שוב."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "space-between",
@@ -7148,6 +7265,173 @@ function ForecastTab({
       cursor: "pointer"
     }
   }, "＋ הוספת הכנסה"))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.card,
+      borderRadius: 14,
+      padding: "6px 14px",
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setWithdrawalsOpen(o => !o),
+    "aria-expanded": withdrawalsOpen,
+    style: {
+      width: "100%",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      border: "none",
+      background: "none",
+      minHeight: 44,
+      cursor: "pointer",
+      fontSize: 13,
+      fontWeight: 700,
+      color: COLORS.ink,
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "🏧 משיכות מזומן (", (cashWithdrawals || []).length, ")"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: COLORS.sub,
+      fontSize: 12
+    }
+  }, withdrawalsOpen ? "סגירה ▴" : "פתיחה ▾")), withdrawalsOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      paddingBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: COLORS.sub,
+      lineHeight: 1.5,
+      marginBottom: 8
+    }
+  }, "משיכה מתוארכת יורדת מהיתרה ביום המשיכה עצמו, ומקוזזת מההערכה המפוזרת של מזומן/ביט באותו חודש, כך שאותו כסף לא נספר פעמיים. הוצאה ששולמה ממזומן שכבר נמשך נרשמת רק במעקב ההוצאות, בלי ירידה נוספת בבנק."), (cashWithdrawals || []).length === 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "10px 2px",
+      textAlign: "center",
+      color: COLORS.sub,
+      fontSize: 13
+    }
+  }, "אין משיכות רשומות"), [...(cashWithdrawals || [])].sort((a, b) => String(b.date).localeCompare(String(a.date))).map(w => /*#__PURE__*/React.createElement("div", {
+    key: w.id,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 0",
+      borderTop: `1px solid ${COLORS.mist}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      fontSize: 13.5,
+      fontWeight: 600,
+      overflowWrap: "anywhere"
+    }
+  }, String(w.date).split("-").reverse().join("/"), w.note ? ` · ${w.note}` : ""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 13.5,
+      whiteSpace: "nowrap"
+    }
+  }, fmt(w.amount)), /*#__PURE__*/React.createElement("button", {
+    disabled: wBusy,
+    onClick: async () => {
+      if (window.confirm(`למחוק את המשיכה של ${fmt(w.amount)} מ־${String(w.date).split("-").reverse().join("/")}?`)) await onRemoveWithdrawal(w.id);
+    },
+    "aria-label": "מחיקת משיכה " + fmt(w.amount),
+    style: {
+      ...iconBtnStyle,
+      color: COLORS.coral
+    }
+  }, "🗑"))), wErr && /*#__PURE__*/React.createElement("div", {
+    role: "alert",
+    style: {
+      color: COLORS.coral,
+      fontSize: 13,
+      margin: "6px 0"
+    }
+  }, wErr), /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.paper,
+      borderRadius: 12,
+      padding: 12,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: labelStyle
+  }, "סכום"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "סכום המשיכה",
+    type: "number",
+    inputMode: "decimal",
+    placeholder: "0",
+    value: wAmount,
+    onChange: e => setWAmount(e.target.value),
+    style: inputStyle
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: labelStyle
+  }, "תאריך המשיכה"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "תאריך המשיכה",
+    type: "date",
+    value: wDate,
+    onChange: e => setWDate(e.target.value),
+    style: inputStyle
+  }))), /*#__PURE__*/React.createElement("label", {
+    style: labelStyle
+  }, "הערה (לא חובה)"), /*#__PURE__*/React.createElement("input", {
+    "aria-label": "הערה למשיכה",
+    placeholder: "למשל: כסף לטיפולים",
+    value: wNote,
+    onChange: e => setWNote(e.target.value),
+    maxLength: 60,
+    style: {
+      ...inputStyle,
+      marginBottom: 10
+    }
+  }), /*#__PURE__*/React.createElement("button", {
+    disabled: wBusy || !(Number(wAmount) > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(wDate),
+    onClick: async () => {
+      setWBusy(true);
+      setWErr("");
+      try {
+        const ok = await onAddWithdrawal(Number(wAmount), wDate, wNote);
+        if (ok !== false) {
+          setWAmount("");
+          setWDate("");
+          setWNote("");
+        } else setWErr("המשיכה לא נשמרה. נסו שוב.");
+      } catch {
+        setWErr("המשיכה לא נשמרה. נסו שוב.");
+      } finally {
+        setWBusy(false);
+      }
+    },
+    style: {
+      width: "100%",
+      minHeight: 44,
+      borderRadius: 10,
+      border: "none",
+      background: COLORS.sage,
+      color: "#fff",
+      fontWeight: 700,
+      fontSize: 13.5,
+      cursor: "pointer"
+    }
+  }, wBusy ? "שומר…" : "＋ הוספת משיכה")))), /*#__PURE__*/React.createElement("div", {
     style: {
       background: COLORS.card,
       borderRadius: 14,
