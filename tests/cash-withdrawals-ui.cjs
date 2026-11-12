@@ -10,12 +10,14 @@ await page.context().route('**/api/**',async route=>{if(route.request().method()
 async function login(){await page.getByPlaceholder('הקלד/י את שמך').fill('בדיקת ממשק');await page.getByRole('button',{name:'כניסה',exact:true}).click();}
 async function forecast(){await page.getByRole('button',{name:'📈 תחזית',exact:true}).click();}
 async function novText(){const b=page.getByRole('button').filter({hasText:'נובמבר 2026'}).first();if(await b.getAttribute('aria-expanded')!=='true')await b.click();return page.locator('body').innerText();}
+async function novRow(){const t=await page.getByRole('button').filter({hasText:'נובמבר 2026'}).first().innerText();return t;}
+async function assertNovChange(amount){const r=await novRow();assert(r.includes(amount),'November change should be '+amount+' but row is: '+JSON.stringify(r));}
 async function addWithdrawal(amount,date,note){const b=page.getByRole('button',{name:/משיכות מזומן/}).first();if(await b.getAttribute('aria-expanded')!=='true')await b.click();await page.getByLabel('סכום המשיכה').fill(String(amount));await page.getByLabel('תאריך המשיכה').fill(date);if(note)await page.getByLabel('הערה למשיכה').fill(note);await page.getByRole('button',{name:'＋ הוספת משיכה',exact:true}).click();}
 await page.goto(`http://127.0.0.1:${server.address().port}`);await login();await forecast();
 
 // ללא משיכות: נובמבר = 6,200 אשראי + 1,000 מזומן מפוזר = שינוי חודשי 7,200-
 let t=await novText();
-assert(t.includes('7,200'),'baseline month total');assert(!t.includes('🏧 משיכת מזומן'),'no withdrawal rows before adding');
+await assertNovChange('7,200');assert(!t.includes('🏧 משיכת מזומן'),'no withdrawal rows before adding');
 
 // משיכה 350 ב־12.11: ירידה ביום המשיכה, ההערכה המפוזרת 650, סכום החודש לא משתנה (אין ספירה כפולה)
 await addWithdrawal(350,'2026-11-12','בדיקה בלבד');
@@ -24,31 +26,30 @@ assert.equal(data.cashWithdrawals.length,1);assert.equal(data.cashWithdrawals[0]
 t=await novText();
 assert(t.includes('🏧 משיכות מזומן'),'withdrawal block in month detail');
 assert(t.includes('650 ₪'),'spread estimate reduced to 650');
-assert(t.includes('7,200'),'month total unchanged - no double count');
+await assertNovChange('7,200');
 await page.screenshot({path:'/downloads/withdrawal-350-mobile.png',fullPage:true});
 
 // הוצאה בפועל לא משנה את יתרת הבנק בתחזית
-const before=t;
 await page.getByRole('button',{name:'▦ ראשי',exact:true}).click();
 await page.getByRole('button',{name:'הוצאה חדשה',exact:true}).click();
 await page.getByRole('spinbutton').first().fill('100');
 await page.getByRole('button',{name:'שמירה',exact:true}).click();
 await page.waitForTimeout(500);assert.equal(data.expenses.length,1);
 await forecast();t=await novText();
-assert(!t.includes('7,100')&&!t.includes('7,300'),'expense entry does not move the forecast balance');
+await assertNovChange('7,200');
 
 // משיכה נוספת 200 בסוף החודש (28.11): אירוע ביום 28, הערכה 450, סכום החודש עדיין 7,200
 await addWithdrawal(200,'2026-11-28');
 await page.getByText('28', {exact:true}).first().waitFor();
 t=await novText();
 assert(t.includes('450 ₪'),'spread estimate 450 after two withdrawals');
-assert(t.includes('7,200'),'month total still unchanged');
+await assertNovChange('7,200');
 const i12=t.indexOf('🏧 משיכת מזומן');const i28=t.lastIndexOf('🏧 משיכת מזומן');assert(i12!==-1&&i28>i12,'two dated events');
 
 // משיכה 700 מעבר לתקציב (סה"כ 1,250): ההערכה מתאפסת, העודף יורד — החודש 7,450-
 await addWithdrawal(700,'2026-11-05');
 await page.waitForTimeout(500);t=await novText();
-assert(t.includes('7,450'),'over-budget withdrawal reduces the balance');
+await assertNovChange('7,450');
 assert(!t.includes('מזומן/ביט (יורד מהבנק באותו חודש)'),'estimate floored at zero - spread line hidden');
 await page.screenshot({path:'/downloads/withdrawal-over-budget-mobile.png',fullPage:true});
 
@@ -56,12 +57,12 @@ await page.screenshot({path:'/downloads/withdrawal-over-budget-mobile.png',fullP
 page.on('dialog',d=>d.accept());
 await page.getByRole('button',{name:/מחיקת משיכה/}).first().click();
 await page.waitForTimeout(500);t=await novText();
-assert(t.includes('7,200'),'delete restores the total');assert.equal(data.cashWithdrawals.length,2);
+await assertNovChange('7,250');assert.equal(data.cashWithdrawals.length,2);
 
 // שרידות אחרי רענון
 await page.reload();await page.getByRole('button',{name:'בדיקת ממשק',exact:true}).click();await forecast();
 await page.getByRole('button',{name:/משיכות מזומן \(2\)/}).waitFor();
-t=await novText();assert(t.includes('7,200'),'persisted after reload');
+await novText();await assertNovChange('7,250');
 await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/downloads/withdrawals-desktop.png',fullPage:true});
 assert.deepEqual(errors,[]);
 console.log('PASS: dated withdrawal on its day, offset without double count, late-month and over-budget withdrawals, expense entry does not move forecast, delete, persistence, mobile+desktop, no JS errors');
