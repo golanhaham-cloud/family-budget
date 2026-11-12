@@ -421,6 +421,22 @@ function cashEstimateForMonth(cashRaw, withdrawalsTotal) {
   const wd = Math.max(Number(withdrawalsTotal) || 0, 0);
   return Math.max(raw - wd, 0);
 }
+// תוכנית המזומן של חודש: כל המשיכות של החודש (all/total) מקוזזות מההערכה המפוזרת, אבל רק משיכות
+// מיום העוגן והלאה (inMonth/inRangeTotal) יורדות כאירועים מהיתרה — מוקדמות יותר כבר משוקפות ביתרת הפתיחה.
+// יום המשיכה בתוך החודש לא משנה את ההערכה ולא את בסיס הפיזור; הוא קובע רק באיזה יום נרשמת הירידה.
+function cashPlanForMonth(cashRaw, withdrawals, mKey, fromDay, dim) {
+  const all = (withdrawals || []).filter(w => w && typeof w.date === "string" && w.date.startsWith(mKey));
+  const total = all.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+  const inMonth = all.filter(w => Math.min(Number(String(w.date).split("-")[2]) || 1, dim) >= fromDay);
+  const inRangeTotal = inMonth.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
+  return {
+    all,
+    total,
+    inMonth,
+    inRangeTotal,
+    estimate: cashEstimateForMonth(cashRaw, total)
+  };
+}
 function monthsDiff(aKey, bKey) {
   const [ay, am] = aKey.split("-").map(Number);
   const [by, bm] = bKey.split("-").map(Number);
@@ -6082,11 +6098,11 @@ function ForecastTab({
     const cashRaw = cashOf(m.key, budgetTotalForMonth(budgets, categories, m.key));
     // משיכות מזומן מתוארכות: יורדות מהבנק ביום המשיכה עצמו ומקוזזות מההערכה המפוזרת של אותו חודש,
     // כדי שאותו כסף לא ייספר פעמיים. משיכה לפני יום העוגן כבר משוקפת ביתרה ואינה אירוע, אבל עדיין מקוזזת.
-    const withdrawalsAll = (cashWithdrawals || []).filter(w => typeof w.date === "string" && w.date.startsWith(m.key));
-    const withdrawalsTotal = withdrawalsAll.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
-    const monthWithdrawals = withdrawalsAll.filter(w => inRange(Number(String(w.date).split("-")[2])));
-    const withdrawalsInRange = monthWithdrawals.reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
-    const cashEstimate = cashEstimateForMonth(cashRaw, withdrawalsTotal);
+    const cashPlan = cashPlanForMonth(cashRaw, cashWithdrawals, m.key, fromDay, dim);
+    const withdrawalsTotal = cashPlan.total;
+    const monthWithdrawals = cashPlan.inMonth;
+    const withdrawalsInRange = cashPlan.inRangeTotal;
+    const cashEstimate = cashPlan.estimate;
     // עוגן מתוארך (תחילת היום, כולל אותו יום): היתרה כבר משקפת תנועות שלפני יום העוגן, ולכן קניות המזומן נספרות
     // רק באופן יחסי מהיום הזה והלאה - כמו שאר התנועות המסוננות לפי fromDay. עוגן ביום 1 = כל החודש נספר.
     const cashAnchorDays = isAnchorMonth ? Math.max(dim - fromDay + 1, 0) : dim;
